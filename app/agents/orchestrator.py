@@ -1,0 +1,73 @@
+from __future__ import annotations
+
+import time
+import uuid
+from dataclasses import dataclass
+
+from app.agents.answer_agent import AnswerAgent
+from app.agents.retrieval_agent import RetrievalAgent
+from app.db.repositories import QueryRepository
+from app.services.vector_store import SearchHit
+
+
+@dataclass(frozen=True)
+class QueryResult:
+    query_id: str
+    question: str
+    answer: str
+    sources: list[SearchHit]
+    latency_ms: float
+
+
+class RAGOrchestrator:
+    """Deterministic agent workflow: retrieve, generate a grounded answer, persist trace data."""
+
+    def __init__(
+        self,
+        *,
+        retrieval_agent: RetrievalAgent,
+        answer_agent: AnswerAgent,
+        query_repository: QueryRepository,
+    ) -> None:
+        self.retrieval_agent = retrieval_agent
+        self.answer_agent = answer_agent
+        self.query_repository = query_repository
+
+    def run(
+        self,
+        *,
+        question: str,
+        top_k: int,
+        document_id: str | None = None,
+    ) -> QueryResult:
+        started = time.perf_counter()
+        hits = self.retrieval_agent.run(
+            question=question,
+            top_k=top_k,
+            document_id=document_id,
+        )
+        answer = self.answer_agent.run(question=question, hits=hits)
+        latency_ms = round((time.perf_counter() - started) * 1000, 3)
+        query_id = str(uuid.uuid4())
+        self.query_repository.create(
+            query_id=query_id,
+            question=question.strip(),
+            answer=answer,
+            top_k=top_k,
+            latency_ms=latency_ms,
+            sources=[
+                {
+                    "document_id": hit.document_id,
+                    "chunk_id": hit.chunk_id,
+                    "score": hit.score,
+                }
+                for hit in hits
+            ],
+        )
+        return QueryResult(
+            query_id=query_id,
+            question=question.strip(),
+            answer=answer,
+            sources=hits,
+            latency_ms=latency_ms,
+        )

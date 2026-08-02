@@ -1,0 +1,12 @@
+Validation performed in the build environment:
+
+$ python3 -m pytest -q
+.....................                                                    [100%]
+21 passed in 0.77s
+
+$ python3 -m compileall -q app tests scripts
+Completed successfully.
+
+Note: The build environment's package index did not provide ChromaDB, so the test
+suite used the project's deterministic InMemoryVectorStore test double. The local
+installation declared in pyproject.toml uses ChromaDB by default.

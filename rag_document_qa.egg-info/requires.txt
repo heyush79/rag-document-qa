@@ -1,0 +1,13 @@
+fastapi<1.0,>=0.128
+uvicorn[standard]<1.0,>=0.34
+chromadb<2.0,>=1.5.9
+sentence-transformers<6.0,>=5.6
+pydantic-settings<3.0,>=2.10
+python-multipart<1.0,>=0.0.20
+pypdf<7.0,>=5.0
+httpx<1.0,>=0.28
+
+[dev]
+pytest<10.0,>=9.0
+pytest-cov<8.0,>=7.0
+ruff<1.0,>=0.12
