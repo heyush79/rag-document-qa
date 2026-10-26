@@ -1,0 +1,102 @@
+from __future__ import annotations
+
+import sqlite3
+from collections.abc import Sequence
+from dataclasses import dataclass
+from datetime import UTC, datetime
+
+
+@dataclass(frozen=True)
+class Migration:
+    version: int
+    name: str
+    sql: str
+
+
+INITIAL_SCHEMA = """
+CREATE TABLE IF NOT EXISTS documents (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    source TEXT NOT NULL,
+    content_hash TEXT NOT NULL UNIQUE,
+    chunk_count INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL CHECK(status IN ('processing', 'ready', 'failed')),
+    error_message TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_documents_created_at ON documents(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(status);
+
+CREATE TABLE IF NOT EXISTS queries (
+    id TEXT PRIMARY KEY,
+    question TEXT NOT NULL,
+    answer TEXT NOT NULL,
+    top_k INTEGER NOT NULL,
+    latency_ms REAL NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS query_sources (
+    query_id TEXT NOT NULL,
+    rank INTEGER NOT NULL,
+    document_id TEXT NOT NULL,
+    chunk_id TEXT NOT NULL,
+    score REAL NOT NULL,
+    PRIMARY KEY(query_id, rank),
+    FOREIGN KEY(query_id) REFERENCES queries(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_queries_created_at ON queries(created_at DESC);
+
+CREATE TABLE IF NOT EXISTS audit_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_type TEXT NOT NULL,
+    entity_id TEXT,
+    payload_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+"""
+
+# Append new migrations with the next version number. Never edit one that has shipped:
+# databases that already recorded it will not run it again.
+MIGRATIONS: tuple[Migration, ...] = (
+    # Idempotent, so databases created before migrations existed upgrade cleanly.
+    Migration(1, "initial_schema", INITIAL_SCHEMA),
+)
+
+MIGRATIONS_TABLE = """
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    applied_at TEXT NOT NULL
+)
+"""
+
+
+def apply_migrations(
+    connection: sqlite3.Connection,
+    migrations: Sequence[Migration] = MIGRATIONS,
+) -> list[int]:
+    """Apply pending migrations in version order, each in its own transaction.
+
+    Assumes one process migrates at a time, which holds because the app migrates on startup.
+    Returns the versions applied by this call.
+    """
+    connection.execute(MIGRATIONS_TABLE)
+    connection.commit()
+    applied = {row[0] for row in connection.execute("SELECT version FROM schema_migrations")}
+    newly_applied: list[int] = []
+    for migration in sorted(migrations, key=lambda item: item.version):
+        if migration.version in applied:
+            continue
+        # executescript commits any open transaction first, so BEGIN goes inside the script.
+        # On failure the transaction stays open and the caller's rollback undoes all of it.
+        connection.executescript("BEGIN;\n" + migration.sql)
+        connection.execute(
+            "INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)",
+            (migration.version, migration.name, datetime.now(UTC).isoformat()),
+        )
+        connection.commit()
+        newly_applied.append(migration.version)
+    return newly_applied

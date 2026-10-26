@@ -18,8 +18,8 @@ The project ingests TXT, Markdown, and text-based PDF files, splits them into ov
 - Agent-style orchestration for ingestion, retrieval, and answer generation
 - Request IDs, processing-time headers, health checks, and structured errors
 - Dependency injection for deterministic tests
-- **21 passing Pytest tests**
-- Architecture and interview narration documentation
+- **32 passing Pytest tests**, run by GitHub Actions on every pull request
+- Architecture documentation
 
 ## Architecture at a glance
 
@@ -232,8 +232,7 @@ python -m pytest -q
 Expected result:
 
 ```text
-.....................                                                    [100%]
-21 passed
+32 passed
 ```
 
 Coverage report:
@@ -242,7 +241,9 @@ Coverage report:
 python -m pytest --cov=app --cov-report=term-missing
 ```
 
-The tests use an in-memory vector-store implementation and deterministic hashing embeddings. Production code uses the ChromaDB adapter and Sentence Transformers. This keeps tests fast, offline, and free from model-download flakiness.
+The tests use an in-memory vector-store implementation, deterministic hashing embeddings, and a mock OpenAI-compatible server built on `httpx.MockTransport`. Production code uses the ChromaDB adapter and Sentence Transformers. This keeps tests fast, offline, and free from model-download flakiness.
+
+GitHub Actions runs `ruff check app tests` and `pytest` on pushes to `main` and on pull requests ([.github/workflows/ci.yml](.github/workflows/ci.yml)).
 
 ## Docker
 
@@ -261,11 +262,12 @@ docker compose up --build
 
 ```text
 rag-document-qa/
+├── .github/workflows/ci.yml    # Lint and tests on GitHub Actions
 ├── app/
 │   ├── agents/                 # Ingestion, retrieval, answer, orchestration
 │   ├── api/routes.py           # REST endpoints
 │   ├── core/                   # Exceptions and logging
-│   ├── db/                     # SQLite schema and repositories
+│   ├── db/                     # SQLite migrations and repositories
 │   ├── services/               # Chunking, embedding, vector store, parsing
 │   ├── config.py               # Environment-based settings
 │   ├── container.py            # Dependency wiring
@@ -274,10 +276,10 @@ rag-document-qa/
 ├── docs/
 │   ├── API.md
 │   ├── ARCHITECTURE.md
-│   └── INTERVIEW_GUIDE.md
+│   └── IMPLEMENTATION_PLAN.md  # Roadmap for DocsGPT-inspired features
 ├── sample_data/
 ├── scripts/
-├── tests/                      # 21 tests
+├── tests/                      # 32 tests
 ├── .env.example
 ├── Dockerfile
 ├── docker-compose.yml
@@ -291,15 +293,3 @@ rag-document-qa/
 This is production-style, not a claim that a single-process laptop service should run a bank.
 
 For a larger deployment, add authentication and authorization, object storage for originals, malware scanning, OCR for scanned PDFs, background ingestion jobs, reranking, evaluation datasets, metrics export, distributed tracing, rate limiting, a managed vector database, and a queue-backed consistency repair process.
-
-## Interview material
-
-Read [docs/INTERVIEW_GUIDE.md](docs/INTERVIEW_GUIDE.md). It contains:
-
-- 60-second and 3-minute project explanations
-- Complete ingestion and query flows
-- Why both ChromaDB and SQLite are used
-- Agent responsibilities
-- Failure handling and consistency trade-offs
-- Scaling plan
-- Common follow-up questions and strong answers

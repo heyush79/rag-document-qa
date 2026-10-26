@@ -41,7 +41,7 @@ class Settings(BaseSettings):
     )
 
     @model_validator(mode="after")
-    def validate_cross_field_settings(self) -> "Settings":
+    def validate_cross_field_settings(self) -> Settings:
         if self.chunk_overlap_words >= self.chunk_size_words:
             raise ValueError("chunk_overlap_words must be smaller than chunk_size_words")
         if self.answer_provider == "openai-compatible":

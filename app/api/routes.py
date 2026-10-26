@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, File, Form, Query, Request, Response, UploadFile, status
+from fastapi.concurrency import run_in_threadpool
 
 from app.container import ApplicationContainer
+from app.core.exceptions import AppError
 from app.schemas import (
     DocumentListResponse,
     DocumentResponse,
@@ -54,7 +56,9 @@ def health(request: Request) -> HealthResponse:
     status_code=status.HTTP_201_CREATED,
     tags=["documents"],
 )
-def ingest_text(payload: TextDocumentRequest, request: Request, response: Response) -> DocumentResponse:
+def ingest_text(
+    payload: TextDocumentRequest, request: Request, response: Response
+) -> DocumentResponse:
     result = container_from(request).ingestion_agent.run(
         title=payload.title,
         source=payload.source,
@@ -80,16 +84,16 @@ async def upload_document(
     container = container_from(request)
     content = await file.read(container.settings.max_upload_bytes + 1)
     if len(content) > container.settings.max_upload_bytes:
-        from app.core.exceptions import AppError
-
         raise AppError(
             f"File exceeds the {container.settings.max_upload_mb} MB limit",
             code="file_too_large",
             status_code=413,
         )
     filename = file.filename or "uploaded-document"
-    text = container.file_parser.parse(filename, content)
-    result = container.ingestion_agent.run(
+    # Parsing and embedding block, so keep them off the event loop.
+    text = await run_in_threadpool(container.file_parser.parse, filename, content)
+    result = await run_in_threadpool(
+        container.ingestion_agent.run,
         title=(title or filename),
         source=f"upload:{filename}",
         text=text,
@@ -165,7 +169,8 @@ def query_history(
     request: Request,
     limit: int = Query(default=20, ge=1, le=100),
 ) -> list[QueryHistoryItem]:
-    return [QueryHistoryItem(**record.__dict__) for record in container_from(request).queries.list_recent(limit)]
+    records = container_from(request).queries.list_recent(limit)
+    return [QueryHistoryItem(**record.__dict__) for record in records]
 
 
 @router.get("/stats", response_model=StatsResponse, tags=["system"])

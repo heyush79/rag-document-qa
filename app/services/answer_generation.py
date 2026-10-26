@@ -73,11 +73,14 @@ class OpenAICompatibleAnswerGenerator:
         model: str,
         api_key: str | None,
         timeout_seconds: float,
+        client: httpx.Client | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.api_key = api_key or "local-key"
         self.timeout_seconds = timeout_seconds
+        # Long-lived so connections are reused; tests pass one backed by a mock transport.
+        self.client = client or httpx.Client()
 
     def generate(self, question: str, hits: list[SearchHit]) -> str:
         if not hits:
@@ -100,7 +103,7 @@ class OpenAICompatibleAnswerGenerator:
             },
         ]
         try:
-            response = httpx.post(
+            response = self.client.post(
                 f"{self.base_url}/chat/completions",
                 headers={"Authorization": f"Bearer {self.api_key}"},
                 json={"model": self.model, "messages": messages, "temperature": 0.1},

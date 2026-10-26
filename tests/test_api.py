@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-
 DOCUMENT = {
     "title": "Engineering Handbook",
     "source": "api-test",
@@ -46,3 +45,26 @@ def test_delete_document_removes_it(client) -> None:
     deleted = client.delete(f"/api/v1/documents/{document_id}")
     assert deleted.status_code == 204
     assert client.get(f"/api/v1/documents/{document_id}").status_code == 404
+
+
+def test_upload_markdown_file(client) -> None:
+    content = b"# Leave policy\n\nEmployees receive twenty four paid leave days each year."
+    response = client.post(
+        "/api/v1/documents/upload",
+        files={"file": ("policy.md", content, "text/markdown")},
+        data={"title": "Leave Policy"},
+    )
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["title"] == "Leave Policy"
+    assert payload["source"] == "upload:policy.md"
+    assert payload["chunk_count"] >= 1
+
+
+def test_upload_rejects_unsupported_file_type(client) -> None:
+    response = client.post(
+        "/api/v1/documents/upload",
+        files={"file": ("image.png", b"\x89PNG\r\n", "image/png")},
+    )
+    assert response.status_code == 415
+    assert response.json()["error"] == "unsupported_file"

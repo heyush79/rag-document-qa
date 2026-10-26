@@ -33,6 +33,8 @@ SQLite stores:
 
 Its responsibility is transactional application state and operational traceability. ChromaDB is not treated as the canonical store for document lifecycle or query audit data.
 
+Schema changes are versioned migrations in `app/db/migrations.py`. On startup the app applies any that a database hasn't recorded in its `schema_migrations` table, each in its own transaction. Shipped migrations are never edited; a change is always a new migration.
+
 ## 3. Component view
 
 ```mermaid
