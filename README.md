@@ -10,16 +10,16 @@ The project ingests TXT, Markdown, and text-based PDF files, splits them into ov
 - Text, Markdown, and PDF ingestion
 - SHA-256 content deduplication
 - Word-window chunking with configurable overlap
-- Sentence Transformers embeddings
+- Sentence Transformers embeddings locally, or any OpenAI-compatible embedding API
 - Persistent ChromaDB vector search with cosine distance
 - SQLite document metadata, query history, source traces, and audit events
 - Offline extractive answer generator, so the application works without an LLM key
-- Optional OpenAI-compatible answer generator for a local or hosted model
+- Optional OpenAI-compatible answer generator for a local or hosted model, with fallback providers and per-call token usage logging
 - Streaming answers as Server-Sent Events
 - Agent-style orchestration for ingestion, retrieval, and answer generation
-- Request IDs, processing-time headers, health checks, and structured errors
+- Request IDs, processing-time headers, health checks with an optional deep provider check, and structured errors
 - Dependency injection for deterministic tests
-- **55 passing Pytest tests**, run by GitHub Actions on every pull request
+- **97 passing Pytest tests**, run by GitHub Actions on every pull request
 - Architecture documentation
 
 ## Architecture at a glance
@@ -77,8 +77,10 @@ py -3.12 -m venv .venv
 
 ```bash
 python -m pip install --upgrade pip
-pip install -e ".[dev]"
+pip install -e ".[local,dev]"
 ```
+
+The `local` extra is Sentence Transformers (and torch) for the default local embedding backend. Leave it out for a smaller install and use the `openai-compatible` or `hashing` embedding backend instead; the app says so at startup if the local backend is selected without it.
 
 ### 4. Create local configuration
 
@@ -207,7 +209,7 @@ The event format is in [docs/API.md](docs/API.md#stream-an-answer).
 | Method | Endpoint | Purpose |
 |---|---|---|
 | GET | `/` | Service metadata |
-| GET | `/api/v1/health` | SQLite and ChromaDB health |
+| GET | `/api/v1/health` | SQLite and ChromaDB health; `?deep=true` also checks the embedder and each LLM provider |
 | POST | `/api/v1/documents/text` | Ingest raw text |
 | POST | `/api/v1/documents/upload` | Upload TXT, MD, or PDF |
 | GET | `/api/v1/documents` | List documents |
@@ -216,7 +218,7 @@ The event format is in [docs/API.md](docs/API.md#stream-an-answer).
 | POST | `/api/v1/query` | Retrieve chunks and answer |
 | POST | `/api/v1/query/stream` | Same, with the answer streamed as Server-Sent Events |
 | GET | `/api/v1/queries` | Recent query history |
-| GET | `/api/v1/stats` | Document, vector, and query counts |
+| GET | `/api/v1/stats` | Document, vector and query counts, plus LLM call and token totals |
 
 More examples are in [docs/API.md](docs/API.md).
 
@@ -244,9 +246,40 @@ RAG_LLM_MODEL=gemini-2.5-flash
 
 Restart the API after changing `.env`. Keep keys in `.env`, which git ignores, never in `.env.example`.
 
+### Fallback providers
+
+`RAG_LLM_FALLBACKS` is a JSON list of extra providers, tried in order when the primary one fails with an error, a timeout or a rate limit:
+
+```env
+RAG_LLM_FALLBACKS='[{"base_url": "http://localhost:11434/v1", "model": "llama3.2:3b", "api_key": "local-key"}]'
+```
+
+A streamed answer falls back only before any text has been sent; after that the stream ends with an `error` event rather than restarting with a different model.
+
+### Usage logging and health
+
+Every attempt to call a provider is logged in the `llm_calls` table with its token usage, latency and outcome, against the query it served. `GET /api/v1/stats` reports the totals under `llm_usage`. `GET /api/v1/health?deep=true` embeds a test string and calls `GET /models` on each provider, so it tells you which key or server is broken before a user does.
+
 Set `RAG_LLM_CONTEXT_WINDOW` to your model's context window in tokens (default 8192). Retrieved chunks are trimmed to fit it, after `RAG_LLM_RESERVED_TOKENS` (default 2000) are kept for the system prompt, question and answer.
 
 Retrieval asks the vector store for more chunks than `top_k`, drops any below `RAG_MIN_RELEVANCE_SCORE`, and keeps the best that fit the budget. The prompt wraps each chunk in a numbered `<document>` tag, tells the model the documents are reference data rather than instructions, and asks for `[S1]`-style citations. When nothing relevant is found, the model is told so instead of receiving an empty context. This reduces hallucination risk, although no prompt can abolish it completely. Humanity remains undefeated at inventing confident nonsense.
+
+## Use a remote embedding API
+
+The default embedding backend runs Sentence Transformers locally. To avoid installing torch, or to use a larger model, point the `openai-compatible` backend at any server that implements `POST /v1/embeddings`. Google AI Studio example:
+
+```env
+RAG_EMBEDDING_BACKEND=openai-compatible
+RAG_EMBEDDING_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
+RAG_EMBEDDING_API_KEY=your-ai-studio-key
+RAG_EMBEDDING_MODEL=gemini-embedding-001
+RAG_CHROMA_COLLECTION=documents_gemini
+RAG_MIN_RELEVANCE_SCORE=0.55
+```
+
+Texts are sent in batches of `RAG_EMBEDDING_BATCH_SIZE` (default 64). Use a new collection name whenever you change the embedding model: the collection remembers which model made its vectors and refuses another.
+
+Relevance scores depend on the model. MiniLM scores unrelated text near 0, so the default threshold of 0.15 works for it. Gemini embeddings scored unrelated questions 0.45 to 0.52 and relevant ones 0.56 to 0.67 on the sample data, so start around 0.55 and tune on your own documents.
 
 ## Run tests
 
@@ -257,7 +290,7 @@ python -m pytest -q
 Expected result:
 
 ```text
-55 passed
+97 passed
 ```
 
 Coverage report:
@@ -274,7 +307,7 @@ GitHub Actions runs `ruff check app tests` and `pytest` on pushes to `main` and 
 
 ```bash
 docker build -t rag-document-qa .
-docker run --rm -p 8000:8000 -v "$(pwd)/data:/app/data" rag-document-qa
+docker run --rm -p 8000:8000 --env-file .env -v "$(pwd)/data:/app/data" rag-document-qa
 ```
 
 Or:
@@ -282,6 +315,8 @@ Or:
 ```bash
 docker compose up --build
 ```
+
+The image includes Sentence Transformers with CPU-only torch. For a much smaller image that uses a remote embedding API or the hashing backend, build with `--build-arg LOCAL_EMBEDDINGS=false` (or `LOCAL_EMBEDDINGS=false docker compose up --build`). CI builds that variant and checks its health on every change.
 
 ## Project structure
 
@@ -293,7 +328,7 @@ rag-document-qa/
 │   ├── api/routes.py           # REST endpoints
 │   ├── core/                   # Exceptions and logging
 │   ├── db/                     # SQLite migrations and repositories
-│   ├── services/               # Chunking, embedding, vector store, parsing
+│   ├── services/               # Chunking, embedding, vector store, parsing, LLM client
 │   ├── config.py               # Environment-based settings
 │   ├── container.py            # Dependency wiring
 │   ├── main.py                 # FastAPI application factory
@@ -304,7 +339,7 @@ rag-document-qa/
 │   └── IMPLEMENTATION_PLAN.md  # Roadmap for DocsGPT-inspired features
 ├── sample_data/
 ├── scripts/
-├── tests/                      # 55 tests
+├── tests/                      # 97 tests
 ├── .env.example
 ├── Dockerfile
 ├── docker-compose.yml

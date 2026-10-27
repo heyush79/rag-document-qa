@@ -1,6 +1,10 @@
 services:
   rag-api:
-    build: .
+    build:
+      context: .
+      args:
+        # Set LOCAL_EMBEDDINGS=false in the shell for the small image without torch.
+        LOCAL_EMBEDDINGS: ${LOCAL_EMBEDDINGS:-true}
     ports:
       - "8000:8000"
     env_file:

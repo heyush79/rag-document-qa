@@ -5,6 +5,7 @@ import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
+import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
@@ -24,6 +25,7 @@ def create_app(
     embedder: Embedder | None = None,
     vector_store: VectorStore | None = None,
     answer_generator: AnswerGenerator | None = None,
+    http_client: httpx.Client | None = None,
 ) -> FastAPI:
     configure_logging()
     resolved_settings = settings or get_settings()
@@ -32,6 +34,7 @@ def create_app(
         embedder=embedder,
         vector_store=vector_store,
         answer_generator=answer_generator,
+        http_client=http_client,
     )
 
     @asynccontextmanager

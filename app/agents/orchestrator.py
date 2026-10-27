@@ -50,13 +50,22 @@ class RAGOrchestrator:
         document_id: str | None = None,
     ) -> QueryResult:
         started = time.perf_counter()
+        # Chosen up front so LLM calls can be logged against the query before it is saved.
+        query_id = str(uuid.uuid4())
         hits = self.retrieval_agent.run(
             question=question,
             top_k=top_k,
             document_id=document_id,
         )
-        answer = self.answer_agent.run(question=question, hits=hits)
-        return self._save(question=question, answer=answer, top_k=top_k, hits=hits, started=started)
+        answer = self.answer_agent.run(question=question, hits=hits, query_id=query_id)
+        return self._save(
+            query_id=query_id,
+            question=question,
+            answer=answer,
+            top_k=top_k,
+            hits=hits,
+            started=started,
+        )
 
     def stream(
         self,
@@ -67,6 +76,7 @@ class RAGOrchestrator:
     ) -> QueryStream:
         """Retrieves before returning, so retrieval errors raise before anything is streamed."""
         started = time.perf_counter()
+        query_id = str(uuid.uuid4())
         hits = self.retrieval_agent.run(
             question=question,
             top_k=top_k,
@@ -74,23 +84,27 @@ class RAGOrchestrator:
         )
         return QueryStream(
             sources=hits,
-            events=self._stream_answer(question=question, top_k=top_k, hits=hits, started=started),
+            events=self._stream_answer(
+                query_id=query_id, question=question, top_k=top_k, hits=hits, started=started
+            ),
         )
 
     def _stream_answer(
         self,
         *,
+        query_id: str,
         question: str,
         top_k: int,
         hits: list[SearchHit],
         started: float,
     ) -> Iterator[str | QueryResult]:
         pieces: list[str] = []
-        for piece in self.answer_agent.stream(question=question, hits=hits):
+        for piece in self.answer_agent.stream(question=question, hits=hits, query_id=query_id):
             pieces.append(piece)
             yield piece
         # Only reached when the answer stream completes, so a failed stream saves nothing.
         yield self._save(
+            query_id=query_id,
             question=question,
             answer="".join(pieces).strip(),
             top_k=top_k,
@@ -101,6 +115,7 @@ class RAGOrchestrator:
     def _save(
         self,
         *,
+        query_id: str,
         question: str,
         answer: str,
         top_k: int,
@@ -108,7 +123,6 @@ class RAGOrchestrator:
         started: float,
     ) -> QueryResult:
         latency_ms = round((time.perf_counter() - started) * 1000, 3)
-        query_id = str(uuid.uuid4())
         self.query_repository.create(
             query_id=query_id,
             question=question.strip(),

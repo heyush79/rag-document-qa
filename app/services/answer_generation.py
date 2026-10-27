@@ -1,21 +1,24 @@
 from __future__ import annotations
 
-import json
 import re
 from collections.abc import Iterator
 from typing import Protocol
 
-import httpx
-
-from app.core.exceptions import UpstreamServiceError
+from app.services.llm import FallbackLLM
 from app.services.prompting import build_answer_messages
 from app.services.vector_store import SearchHit
 
 
 class AnswerGenerator(Protocol):
-    def generate(self, question: str, hits: list[SearchHit]) -> str: ...
+    """`query_id` is the query being answered, so LLM calls can be logged against it."""
 
-    def stream(self, question: str, hits: list[SearchHit]) -> Iterator[str]: ...
+    def generate(
+        self, question: str, hits: list[SearchHit], *, query_id: str | None = None
+    ) -> str: ...
+
+    def stream(
+        self, question: str, hits: list[SearchHit], *, query_id: str | None = None
+    ) -> Iterator[str]: ...
 
 
 class ExtractiveAnswerGenerator:
@@ -32,7 +35,9 @@ class ExtractiveAnswerGenerator:
     def __init__(self, min_relevance_score: float = 0.15) -> None:
         self.min_relevance_score = min_relevance_score
 
-    def generate(self, question: str, hits: list[SearchHit]) -> str:
+    def generate(
+        self, question: str, hits: list[SearchHit], *, query_id: str | None = None
+    ) -> str:
         useful_hits = [hit for hit in hits if hit.score >= self.min_relevance_score]
         if not useful_hits:
             return "I could not find enough relevant information in the indexed documents."
@@ -69,76 +74,29 @@ class ExtractiveAnswerGenerator:
             return f"{top.text[:700].strip()} [S1]"
         return " ".join(selected)
 
-    def stream(self, question: str, hits: list[SearchHit]) -> Iterator[str]:
+    def stream(
+        self, question: str, hits: list[SearchHit], *, query_id: str | None = None
+    ) -> Iterator[str]:
         yield self.generate(question, hits)
 
 
 class OpenAICompatibleAnswerGenerator:
-    def __init__(
-        self,
-        *,
-        base_url: str,
-        model: str,
-        api_key: str | None,
-        timeout_seconds: float,
-        client: httpx.Client | None = None,
-    ) -> None:
-        self.base_url = base_url.rstrip("/")
-        self.model = model
-        self.api_key = api_key or "local-key"
-        self.timeout_seconds = timeout_seconds
-        # Long-lived so connections are reused; tests pass one backed by a mock transport.
-        self.client = client or httpx.Client()
+    """Asks the configured LLM providers, with the retrieved chunks framed as reference data."""
 
-    def generate(self, question: str, hits: list[SearchHit]) -> str:
+    def __init__(self, llm: FallbackLLM) -> None:
+        self.llm = llm
+
+    def generate(
+        self, question: str, hits: list[SearchHit], *, query_id: str | None = None
+    ) -> str:
         # Called even with no hits: the prompt then says nothing relevant was found.
         messages = build_answer_messages(question, hits)
-        try:
-            response = self.client.post(
-                f"{self.base_url}/chat/completions",
-                headers={"Authorization": f"Bearer {self.api_key}"},
-                json={"model": self.model, "messages": messages, "temperature": 0.1},
-                timeout=self.timeout_seconds,
-            )
-            response.raise_for_status()
-            payload = response.json()
-            return str(payload["choices"][0]["message"]["content"]).strip()
-        except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as exc:
-            raise UpstreamServiceError(f"Answer model request failed: {exc}") from exc
+        return self.llm.complete(messages, purpose="answer", query_id=query_id).text
 
-    def stream(self, question: str, hits: list[SearchHit]) -> Iterator[str]:
-        """Yields the answer as the server sends it, from an SSE `"stream": true` response."""
+    def stream(
+        self, question: str, hits: list[SearchHit], *, query_id: str | None = None
+    ) -> Iterator[str]:
         messages = build_answer_messages(question, hits)
-        try:
-            with self.client.stream(
-                "POST",
-                f"{self.base_url}/chat/completions",
-                headers={"Authorization": f"Bearer {self.api_key}"},
-                json={
-                    "model": self.model,
-                    "messages": messages,
-                    "temperature": 0.1,
-                    "stream": True,
-                },
-                timeout=self.timeout_seconds,
-            ) as response:
-                response.raise_for_status()
-                for line in response.iter_lines():
-                    if not line.startswith("data:"):
-                        continue  # blank separators, comments and other SSE fields
-                    data = line.removeprefix("data:").strip()
-                    if data == "[DONE]":
-                        return
-                    chunk = json.loads(data)
-                    if "error" in chunk:
-                        raise UpstreamServiceError(
-                            f"Answer model stream failed: {chunk['error']}"
-                        )
-                    choices = chunk.get("choices") or []  # empty in usage-only chunks
-                    piece = (choices[0].get("delta") or {}).get("content") if choices else None
-                    if piece:
-                        yield piece
-        except (
-            httpx.HTTPError, AttributeError, KeyError, IndexError, TypeError, ValueError
-        ) as exc:
-            raise UpstreamServiceError(f"Answer model request failed: {exc}") from exc
+        for item in self.llm.stream(messages, purpose="answer", query_id=query_id):
+            if isinstance(item, str):
+                yield item

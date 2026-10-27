@@ -5,7 +5,7 @@ PYTHON ?= python3
 
 install:
 	$(PYTHON) -m venv .venv
-	. .venv/bin/activate && python -m pip install --upgrade pip && pip install -e ".[dev]"
+	. .venv/bin/activate && python -m pip install --upgrade pip && pip install -e ".[local,dev]"
 
 run:
 	. .venv/bin/activate && uvicorn app.main:create_app --factory --reload

@@ -4,8 +4,14 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, model_validator
+from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class LLMProviderConfig(BaseModel):
+    base_url: str = Field(min_length=1)
+    model: str = Field(min_length=1)
+    api_key: str | None = None
 
 
 class Settings(BaseSettings):
@@ -17,9 +23,29 @@ class Settings(BaseSettings):
     chroma_path: Path = Path("data/chroma")
     chroma_collection: str = "documents"
 
-    embedding_backend: Literal["sentence-transformers", "hashing"] = "sentence-transformers"
-    embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    embedding_backend: Literal["sentence-transformers", "hashing", "openai-compatible"] = (
+        "sentence-transformers"
+    )
+    embedding_model: str = Field(
+        default="sentence-transformers/all-MiniLM-L6-v2",
+        min_length=1,
+        description="Model name for the sentence-transformers and openai-compatible backends.",
+    )
     embedding_dimension: int = Field(default=384, ge=8)
+    embedding_base_url: str | None = Field(
+        default=None,
+        description="Base URL of an OpenAI-compatible /embeddings API, for the openai-compatible "
+        "backend.",
+    )
+    embedding_api_key: str | None = Field(
+        default=None, description="API key for the openai-compatible embedding backend."
+    )
+    embedding_batch_size: int = Field(
+        default=64,
+        ge=1,
+        le=2048,
+        description="Texts per request to the openai-compatible embedding backend.",
+    )
 
     chunk_size_words: int = Field(default=180, ge=20, le=1000)
     chunk_overlap_words: int = Field(default=30, ge=0, le=500)
@@ -31,7 +57,16 @@ class Settings(BaseSettings):
     llm_base_url: str | None = None
     llm_api_key: str | None = None
     llm_model: str | None = None
-    llm_timeout_seconds: float = Field(default=60.0, gt=0)
+    llm_timeout_seconds: float = Field(
+        default=60.0,
+        gt=0,
+        description="Timeout for each request to an LLM or embedding API, in seconds.",
+    )
+    llm_fallbacks: list[LLMProviderConfig] = Field(
+        default_factory=list,
+        description="JSON list of providers tried in order when the primary one fails, each "
+        '{"base_url": ..., "model": ..., "api_key": ...}.',
+    )
     llm_context_window: int = Field(
         default=8192,
         ge=512,
@@ -58,6 +93,8 @@ class Settings(BaseSettings):
             raise ValueError("chunk_overlap_words must be smaller than chunk_size_words")
         if self.llm_reserved_tokens >= self.llm_context_window:
             raise ValueError("llm_reserved_tokens must be smaller than llm_context_window")
+        if self.embedding_backend == "openai-compatible" and not self.embedding_base_url:
+            raise ValueError("OpenAI-compatible embedding backend requires: embedding_base_url")
         if self.answer_provider == "openai-compatible":
             missing = [
                 name

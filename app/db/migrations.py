@@ -58,11 +58,34 @@ CREATE TABLE IF NOT EXISTS audit_events (
 );
 """
 
+# One row per attempt to call an LLM provider. query_id has no foreign key: a call is recorded
+# before its query row exists, and a query that fails keeps its call rows.
+LLM_CALLS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS llm_calls (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    query_id TEXT,
+    purpose TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    prompt_tokens INTEGER,
+    completion_tokens INTEGER,
+    tokens_estimated INTEGER NOT NULL DEFAULT 0,
+    latency_ms REAL NOT NULL,
+    ok INTEGER NOT NULL,
+    error TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_llm_calls_query_id ON llm_calls(query_id);
+CREATE INDEX IF NOT EXISTS idx_llm_calls_created_at ON llm_calls(created_at DESC);
+"""
+
 # Append new migrations with the next version number. Never edit one that has shipped:
 # databases that already recorded it will not run it again.
 MIGRATIONS: tuple[Migration, ...] = (
     # Idempotent, so databases created before migrations existed upgrade cleanly.
     Migration(1, "initial_schema", INITIAL_SCHEMA),
+    Migration(2, "llm_calls", LLM_CALLS_SCHEMA),
 )
 
 MIGRATIONS_TABLE = """

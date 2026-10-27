@@ -13,9 +13,12 @@ from app.agents.orchestrator import QueryResult, QueryStream
 from app.container import ApplicationContainer
 from app.core.exceptions import AppError
 from app.schemas import (
+    ComponentHealth,
     DocumentListResponse,
     DocumentResponse,
     HealthResponse,
+    LLMUsageStats,
+    ProviderHealth,
     QueryHistoryItem,
     QueryRequest,
     QueryResponse,
@@ -94,16 +97,55 @@ def sse_events(stream: QueryStream) -> Iterator[str]:
         )
 
 
-@router.get("/health", response_model=HealthResponse, tags=["system"])
-def health(request: Request) -> HealthResponse:
+def check_embedder(container: ApplicationContainer) -> ComponentHealth:
+    try:
+        container.embedder.embed_query("health check")
+    except Exception as exc:
+        logger.warning("Embedder health check failed: %s", exc)
+        return ComponentHealth(status="error", detail=str(exc)[:500])
+    return ComponentHealth(status="ok")
+
+
+@router.get(
+    "/health",
+    response_model=HealthResponse,
+    response_model_exclude_none=True,
+    tags=["system"],
+)
+def health(
+    request: Request,
+    deep: bool = Query(
+        default=False,
+        description="Also embed a test string and contact each LLM provider. Slower, and "
+        "the first call may load the embedding model.",
+    ),
+) -> HealthResponse:
     container = container_from(request)
     sqlite_ok = container.db.ping()
     chroma_ok = container.vector_store.ping()
+    healthy = sqlite_ok and chroma_ok
+    embedder = None
+    llm = None
+    if deep:
+        embedder = check_embedder(container)
+        providers = container.llm.check_providers() if container.llm else []
+        llm = [
+            ProviderHealth(
+                status="ok" if item.ok else "error",
+                detail=item.detail,
+                base_url=item.base_url,
+                model=item.model,
+            )
+            for item in providers
+        ]
+        healthy = healthy and embedder.status == "ok" and all(item.ok for item in providers)
     return HealthResponse(
-        status="ok" if sqlite_ok and chroma_ok else "degraded",
+        status="ok" if healthy else "degraded",
         sqlite="ok" if sqlite_ok else "error",
         chroma="ok" if chroma_ok else "error",
         embedding_backend=container.settings.embedding_backend,
+        embedder=embedder,
+        llm=llm,
     )
 
 
@@ -247,8 +289,15 @@ def query_history(
 @router.get("/stats", response_model=StatsResponse, tags=["system"])
 def stats(request: Request) -> StatsResponse:
     container = container_from(request)
+    usage = container.llm_calls.totals()
     return StatsResponse(
         document_count=container.documents.count(),
         vector_count=container.vector_store.count(),
         query_count=container.queries.count(),
+        llm_usage=LLMUsageStats(
+            calls=usage.calls,
+            failed_calls=usage.failed_calls,
+            prompt_tokens=usage.prompt_tokens,
+            completion_tokens=usage.completion_tokens,
+        ),
     )

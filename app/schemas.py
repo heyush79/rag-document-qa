@@ -61,10 +61,28 @@ class QueryHistoryItem(BaseModel):
     created_at: str
 
 
+class LLMUsageStats(BaseModel):
+    calls: int
+    failed_calls: int
+    prompt_tokens: int
+    completion_tokens: int
+
+
 class StatsResponse(BaseModel):
     document_count: int
     vector_count: int
     query_count: int
+    llm_usage: LLMUsageStats
+
+
+class ComponentHealth(BaseModel):
+    status: str
+    detail: str | None = None
+
+
+class ProviderHealth(ComponentHealth):
+    base_url: str
+    model: str
 
 
 class HealthResponse(BaseModel):
@@ -72,6 +90,9 @@ class HealthResponse(BaseModel):
     sqlite: str
     chroma: str
     embedding_backend: str
+    # Only present with ?deep=true.
+    embedder: ComponentHealth | None = None
+    llm: list[ProviderHealth] | None = None
 
 
 class ErrorResponse(BaseModel):

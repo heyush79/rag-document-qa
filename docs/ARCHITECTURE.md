@@ -29,6 +29,7 @@ SQLite stores:
 - Ingestion status
 - Query history
 - Query-to-source trace records
+- LLM call log: one row per provider attempt, with token usage, latency and outcome
 - Audit events
 
 Its responsibility is transactional application state and operational traceability. ChromaDB is not treated as the canonical store for document lifecycle or query audit data.
@@ -222,9 +223,18 @@ The Retrieval Agent:
 The Answer Agent abstracts answer generation. Two strategies are included:
 
 - `ExtractiveAnswerGenerator`: fully local and deterministic
-- `OpenAICompatibleAnswerGenerator`: calls `/v1/chat/completions`
+- `OpenAICompatibleAnswerGenerator`: asks the LLM providers through `FallbackLLM`
 
-Each has `generate()`, which returns the whole answer, and `stream()`, which yields it in pieces. The OpenAI-compatible `stream()` sends `"stream": true` and reads the server's SSE `delta` chunks until `[DONE]`; the extractive one yields its whole answer once.
+Each has `generate()`, which returns the whole answer, and `stream()`, which yields it in pieces. The extractive one yields its whole answer once.
+
+### LLM providers and fallback
+
+`app/services/llm.py` holds `FallbackLLM`: a list of OpenAI-compatible providers, the primary from `RAG_LLM_*` and then `RAG_LLM_FALLBACKS`, tried in order.
+
+- `complete()` moves to the next provider on any upstream error: an HTTP error status (including 429 rate limits), a timeout, a connection failure or a malformed response. When every provider fails, the caller gets a 502.
+- `stream()` sends `"stream": true` with `stream_options.include_usage` and reads the server's SSE `delta` chunks until `[DONE]`. It moves to the next provider only while nothing has been yielded yet: once a client has seen part of an answer, a second provider would start a different one, so the stream ends with an error instead.
+- Every attempt is recorded in `llm_calls` with the provider, model, purpose, token usage, latency and outcome, against the id of the query being answered. The orchestrator chooses that id before retrieval so the rows exist even when the query itself fails. Token counts come from the provider's `usage`; when none is reported they are estimated at about four characters per token and the row says so.
+- `check_providers()` calls `GET /models` on each provider for the deep health check.
 
 ### RAG Orchestrator
 
@@ -250,9 +260,17 @@ Overlap helps preserve facts that cross a chunk boundary. Word-based chunking is
 
 ## 8. Embedding strategy
 
-### Production default
+### Local default
 
-`SentenceTransformerEmbedder` loads a configured Sentence Transformers model lazily. It uses document and query encoding methods when the installed model API provides them and normalizes vectors before storage.
+`SentenceTransformerEmbedder` loads a configured Sentence Transformers model lazily. It uses document and query encoding methods when the installed model API provides them and normalizes vectors before storage. It needs the `local` extra (`pip install -e ".[local]"`), which brings in torch; the app refuses to start without it and says so.
+
+### Remote option
+
+`OpenAICompatibleEmbedder` calls `POST {base_url}/embeddings` in batches of `embedding_batch_size` texts and normalizes the vectors. It works with any server that implements the OpenAI embeddings API, including Google AI Studio and Ollama, and lets the Docker image skip torch (`LOCAL_EMBEDDINGS=false`).
+
+Each embedder has a signature (`sentence-transformers:<model>`, `openai-compatible:<model>`, `hashing:v1:<dimension>`) that is stored on the Chroma collection when it is created. Opening a collection with a different signature is refused with a 409, because vectors from different models can't be compared. Use a new collection name when switching models.
+
+Similarity scores depend on the model. MiniLM scores unrelated text near 0, so the default `min_relevance_score` of 0.15 works. Gemini embeddings score unrelated text around 0.4 to 0.5, so the threshold needs raising for them; see the README.
 
 ### Test strategy
 
@@ -289,8 +307,10 @@ The score is convenient for clients, but it is not a calibrated probability. In 
 | Missing document | HTTP 404 |
 | Duplicate content | Existing document returned with HTTP 200 |
 | Embedding/index failure | Document marked failed; partial vectors deleted |
-| LLM HTTP/JSON failure | HTTP 502 |
-| LLM failure during a stream | Final `error` event; query not saved |
+| LLM provider fails | Next fallback provider is tried; HTTP 502 once all have failed |
+| LLM failure during a stream | Next provider if nothing was sent yet; otherwise a final `error` event and the query is not saved |
+| Embedding API failure | HTTP 502 on queries; the document is marked failed on ingestion |
+| ChromaDB unreachable | `/health` reports `degraded` |
 | Client disconnects during a stream | The app stops reading the model's stream; query not saved |
 | Embedding-model mismatch | HTTP 409 with remediation guidance |
 
@@ -301,7 +321,9 @@ Every response includes:
 - `X-Request-ID`
 - `X-Process-Time-Ms`
 
-The application stores query latency and source traces. A larger deployment should export metrics such as:
+`GET /health` checks SQLite and ChromaDB; `GET /health?deep=true` also embeds a test string and contacts each LLM provider.
+
+Every LLM call attempt is logged in `llm_calls`, and `GET /stats` totals the calls, failures and tokens. The application also stores query latency and source traces. A larger deployment should export metrics such as:
 
 - Ingestion duration
 - Embedding duration

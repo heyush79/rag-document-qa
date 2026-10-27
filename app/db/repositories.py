@@ -188,6 +188,113 @@ class QueryRepository:
         return int(row["count"])
 
 
+@dataclass(frozen=True)
+class LLMCallRecord:
+    id: int
+    query_id: str | None
+    purpose: str
+    provider: str
+    model: str
+    prompt_tokens: int | None
+    completion_tokens: int | None
+    tokens_estimated: bool
+    latency_ms: float
+    ok: bool
+    error: str | None
+    created_at: str
+
+
+@dataclass(frozen=True)
+class LLMUsageTotals:
+    calls: int
+    failed_calls: int
+    prompt_tokens: int
+    completion_tokens: int
+
+
+class LLMCallRepository:
+    def __init__(self, db: SQLiteDatabase) -> None:
+        self.db = db
+
+    def create(
+        self,
+        *,
+        query_id: str | None,
+        purpose: str,
+        provider: str,
+        model: str,
+        prompt_tokens: int | None,
+        completion_tokens: int | None,
+        tokens_estimated: bool,
+        latency_ms: float,
+        ok: bool,
+        error: str | None,
+    ) -> None:
+        with self.db.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO llm_calls(
+                    query_id, purpose, provider, model, prompt_tokens, completion_tokens,
+                    tokens_estimated, latency_ms, ok, error, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    query_id,
+                    purpose,
+                    provider,
+                    model,
+                    prompt_tokens,
+                    completion_tokens,
+                    int(tokens_estimated),
+                    latency_ms,
+                    int(ok),
+                    error[:1000] if error else None,
+                    utc_now_iso(),
+                ),
+            )
+
+    def list_for_query(self, query_id: str) -> list[LLMCallRecord]:
+        with self.db.connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM llm_calls WHERE query_id = ? ORDER BY id", (query_id,)
+            ).fetchall()
+        return [self._to_record(row) for row in rows]
+
+    def list_recent(self, limit: int = 20) -> list[LLMCallRecord]:
+        with self.db.connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM llm_calls ORDER BY id DESC LIMIT ?", (limit,)
+            ).fetchall()
+        return [self._to_record(row) for row in rows]
+
+    def totals(self) -> LLMUsageTotals:
+        with self.db.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT
+                    COUNT(*) AS calls,
+                    COALESCE(SUM(ok = 0), 0) AS failed_calls,
+                    COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+                    COALESCE(SUM(completion_tokens), 0) AS completion_tokens
+                FROM llm_calls
+                """
+            ).fetchone()
+        return LLMUsageTotals(
+            calls=int(row["calls"]),
+            failed_calls=int(row["failed_calls"]),
+            prompt_tokens=int(row["prompt_tokens"]),
+            completion_tokens=int(row["completion_tokens"]),
+        )
+
+    @staticmethod
+    def _to_record(row: sqlite3.Row) -> LLMCallRecord:
+        values = dict(row)
+        values["tokens_estimated"] = bool(values["tokens_estimated"])
+        values["ok"] = bool(values["ok"])
+        return LLMCallRecord(**values)
+
+
 class AuditRepository:
     def __init__(self, db: SQLiteDatabase) -> None:
         self.db = db

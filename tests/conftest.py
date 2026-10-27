@@ -17,6 +17,7 @@ from app.services.answer_generation import (
     OpenAICompatibleAnswerGenerator,
 )
 from app.services.embeddings import HashingEmbedder
+from app.services.llm import FallbackLLM, LLMProvider
 from app.services.vector_store import InMemoryVectorStore, SearchHit
 
 
@@ -50,13 +51,33 @@ class MockLLM:
     """Stands in for an OpenAI-compatible server: records requests and replies from a queue."""
 
     base_url = "http://mock-llm/v1"
+    model = "mock-model"
+    api_key = "test-key"
     default_pieces = ("Mock", " answer.", " [S1]")
     default_answer = "".join(default_pieces)
 
     def __init__(self) -> None:
         self.requests: list[httpx.Request] = []
         self._responses: list[httpx.Response] = []
+        # Status returned by GET /models, which the deep health check calls.
+        self.models_status = 200
         self.client = httpx.Client(transport=httpx.MockTransport(self._handle))
+
+    def provider(self) -> LLMProvider:
+        return LLMProvider(base_url=self.base_url, model=self.model, api_key=self.api_key)
+
+    def llm(self) -> FallbackLLM:
+        """A single-provider LLM that records nothing; the API fixtures wire a real one."""
+        return FallbackLLM([self.provider()], timeout_seconds=5, client=self.client)
+
+    def settings_update(self) -> dict[str, Any]:
+        return {
+            "answer_provider": "openai-compatible",
+            "llm_base_url": self.base_url,
+            "llm_model": self.model,
+            "llm_api_key": self.api_key,
+            "llm_timeout_seconds": 5,
+        }
 
     def reply(self, content: str) -> None:
         self._responses.append(httpx.Response(200, json=chat_completion(content)))
@@ -90,16 +111,12 @@ class MockLLM:
         return json.loads(self.requests[-1].content)
 
     def generator(self) -> OpenAICompatibleAnswerGenerator:
-        return OpenAICompatibleAnswerGenerator(
-            base_url=self.base_url,
-            model="mock-model",
-            api_key="test-key",
-            timeout_seconds=5,
-            client=self.client,
-        )
+        return OpenAICompatibleAnswerGenerator(self.llm())
 
     def _handle(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
+        if request.url.path.endswith("/models"):
+            return httpx.Response(self.models_status, json={"data": [{"id": self.model}]})
         if self._responses:
             return self._responses.pop(0)
         if json.loads(request.content).get("stream"):
@@ -110,7 +127,9 @@ class MockLLM:
 
 @pytest.fixture
 def settings(tmp_path):
+    # _env_file=None keeps a developer's .env out of the tests.
     return Settings(
+        _env_file=None,
         sqlite_path=tmp_path / "rag.db",
         chroma_path=tmp_path / "chroma",
         chroma_collection=f"test_{uuid.uuid4().hex}",
@@ -185,7 +204,13 @@ def mock_llm():
 
 
 @pytest.fixture
-def llm_client(settings, vector_store, mock_llm):
-    app = create_app(settings, vector_store=vector_store, answer_generator=mock_llm.generator())
+def llm_settings(settings, mock_llm):
+    return settings.model_copy(update=mock_llm.settings_update())
+
+
+@pytest.fixture
+def llm_client(llm_settings, vector_store, mock_llm):
+    """The app wired as in production for an OpenAI-compatible provider, on the mock server."""
+    app = create_app(llm_settings, vector_store=vector_store, http_client=mock_llm.client)
     with TestClient(app) as test_client:
         yield test_client

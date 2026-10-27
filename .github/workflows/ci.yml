@@ -21,10 +21,29 @@ jobs:
         # CPU-only torch: the default Linux wheel pulls several GB of CUDA libraries.
         run: |
           python -m pip install --upgrade pip
-          pip install --extra-index-url https://download.pytorch.org/whl/cpu -e ".[dev]"
+          pip install --extra-index-url https://download.pytorch.org/whl/cpu -e ".[local,dev]"
 
       - name: Lint
         run: ruff check app tests
 
       - name: Test
         run: pytest -q
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build the image without local embeddings
+        # The slim variant: the test job already installs the torch-based local extra.
+        run: docker build --build-arg LOCAL_EMBEDDINGS=false -t rag-document-qa:ci .
+
+      - name: Start the container and check its health
+        run: |
+          docker run -d --name rag -p 8000:8000 -e RAG_EMBEDDING_BACKEND=hashing rag-document-qa:ci
+          for attempt in $(seq 1 30); do
+            curl -sf http://localhost:8000/api/v1/health && break
+            sleep 2
+          done
+          docker logs rag
+          curl -sf "http://localhost:8000/api/v1/health?deep=true"

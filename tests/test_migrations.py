@@ -26,7 +26,9 @@ def test_initialize_applies_all_migrations(tmp_path) -> None:
     db = SQLiteDatabase(tmp_path / "rag.db")
     db.initialize()
     assert applied_versions(db) == ALL_VERSIONS
-    assert {"documents", "queries", "query_sources", "audit_events"} <= table_names(db)
+    assert {"documents", "queries", "query_sources", "audit_events", "llm_calls"} <= table_names(
+        db
+    )
 
 
 def test_initialize_is_idempotent(tmp_path) -> None:

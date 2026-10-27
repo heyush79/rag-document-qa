@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -7,6 +8,8 @@ from typing import Any, Protocol
 from app.core.exceptions import ConflictError
 from app.services.chunking import TextChunk
 from app.services.embeddings import Embedder
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -158,7 +161,11 @@ class ChromaVectorStore:
         return self.collection.count()
 
     def ping(self) -> bool:
-        self.collection.count()
+        try:
+            self.collection.count()
+        except Exception as exc:  # /health reports degraded instead of failing with a 500
+            logger.warning("Chroma ping failed: %s", exc)
+            return False
         return True
 
 

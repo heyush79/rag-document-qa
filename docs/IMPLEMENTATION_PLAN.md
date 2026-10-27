@@ -165,7 +165,7 @@ Tests added:
 
 ## Phase 2: Streaming answers (row 1)
 
-Status: done and committed. 55 tests pass, and ruff reports nothing.
+Status: done and committed (`76ddb6a`). 55 tests pass, and ruff reports nothing.
 
 Goal: stream LLM answers as Server-Sent Events, so clients can show the answer while it is being
 generated.
@@ -213,46 +213,84 @@ Tests added:
 
 ## Phase 3: Providers, remote embeddings, usage logging, deep health check (rows 7, 8, 17)
 
+Status: done on branch `phase-3-providers`, waiting for review. 97 tests pass, and ruff reports
+nothing.
+
 Goal: keep answering when one provider is rate-limited, run without a local embedding model, and
 record what each LLM call cost.
 
-- [ ] `app/services/llm.py`: an OpenAI-compatible client whose `complete()` and `stream()` return
-      the text plus token usage, and a `FallbackLLM` that tries providers in order. A
-      non-streaming call moves to the next provider on any upstream error. A streaming call moves
-      on only if the error comes before any text has been sent. Answer generation and, in phase 5,
-      query rewriting both go through it.
-- [ ] Settings: the current `RAG_LLM_BASE_URL`, `RAG_LLM_MODEL` and `RAG_LLM_API_KEY` stay the
-      primary provider. Add `RAG_LLM_FALLBACKS`, a JSON list of
-      `{"base_url": ..., "model": ..., "api_key": ...}`.
-- [ ] `OpenAICompatibleEmbedder` calls `POST {base_url}/embeddings` in batches
-      (`embedding_batch_size`, default 64) and normalizes the vectors. Its signature is
+- [x] `app/services/llm.py`: `FallbackLLM` holds the providers and tries them in order. `complete()`
+      returns a `Completion` with the text and token usage; `stream()` yields text pieces and then
+      the `Completion`. A non-streaming call moves to the next provider on any upstream error
+      (an error status, a timeout, a connection failure or a malformed response). A streaming call
+      moves on only if the error comes before any text has been sent. `OpenAICompatibleAnswerGenerator`
+      now takes a `FallbackLLM`; query rewriting in phase 5 will use the same object.
+- [x] Settings: `RAG_LLM_BASE_URL`, `RAG_LLM_MODEL` and `RAG_LLM_API_KEY` stay the primary
+      provider. `RAG_LLM_FALLBACKS` is a JSON list of `{"base_url", "model", "api_key"}`, parsed
+      by pydantic-settings; each entry needs a base URL and a model.
+- [x] `OpenAICompatibleEmbedder` calls `POST {base_url}/embeddings` in batches of
+      `embedding_batch_size` (default 64) and normalizes the vectors. Its signature is
       `openai-compatible:{model}`, so the existing check on the Chroma collection refuses a switch
-      to a different model. Add the `embedding_backend` value `openai-compatible`, with
-      `embedding_base_url` and `embedding_api_key`.
-- [ ] Move `sentence-transformers`, and torch with it, to an optional `local` extra, so images
-      that use remote embeddings stay small. If the local backend is selected without the extra
-      installed, fail with a clear message. The install command becomes
-      `pip install -e ".[local,dev]"`.
-- [ ] Docker image: a build argument chooses whether to include the `local` extra. When it is
-      included, install CPU-only torch, because the default Linux torch wheel brings in several GB
-      of CUDA. CI builds the image on each pull request.
-- [ ] Usage logging: a migration adds `llm_calls(id, query_id, purpose, provider, model,
-      prompt_tokens, completion_tokens, latency_ms, ok, error, created_at)`. Token counts come from
-      the response's `usage` field. Streaming requests send `stream_options: {"include_usage": true}`
-      and fall back to `estimate_tokens` when the server doesn't report usage. The orchestrator
-      records each call against its query id. `/stats` gains totals for calls and tokens.
-- [ ] `GET /health?deep=true` also embeds a short test string and calls `GET {base_url}/models` on
-      each LLM provider, reporting each result. `ChromaVectorStore.ping()` should return `False` on
-      error instead of raising, so `/health` reports `degraded` rather than failing with a 500.
+      to a different model. New settings: `embedding_backend=openai-compatible`,
+      `embedding_base_url`, `embedding_api_key`, `embedding_batch_size`. Requests reuse
+      `llm_timeout_seconds` rather than adding another timeout. Entries without an `index` (Gemini
+      omits it) are taken in response order.
+- [x] `sentence-transformers` moved to the optional `local` extra. `SentenceTransformerEmbedder`
+      checks for the package when it is built, so a missing extra fails at startup with a message
+      naming the extra and the other backends. Install with `pip install -e ".[local,dev]"`.
+- [x] Docker: `--build-arg LOCAL_EMBEDDINGS=false` builds the image without torch;
+      `LOCAL_EMBEDDINGS=true` (the default) installs CPU-only torch. Compose passes the same
+      variable through. CI builds the slim variant, starts it with the hashing backend and checks
+      `/health?deep=true`; the test job already installs the torch-based extra.
+- [x] Usage logging: migration 2 adds `llm_calls(id, query_id, purpose, provider, model,
+      prompt_tokens, completion_tokens, tokens_estimated, latency_ms, ok, error, created_at)`.
+      `tokens_estimated` was added to the planned columns so estimated counts aren't mistaken for
+      reported ones. `provider` holds the base URL. There is no foreign key to `queries`: the
+      orchestrator now picks the query id before retrieval, calls are logged against it as they
+      happen, and a failed query keeps its rows. Streaming requests send
+      `stream_options: {"include_usage": true}`; usage is taken from whichever chunk carries it
+      (Gemini puts it on the last text chunk, OpenAI on a trailing chunk with no choices) and
+      estimated with `estimate_tokens` otherwise. `/stats` gains `llm_usage` with `calls`,
+      `failed_calls`, `prompt_tokens` and `completion_tokens`.
+- [x] `GET /health?deep=true` embeds a short test string and calls `GET {base_url}/models` on
+      each provider. The response gains `embedder: {status, detail?}` and `llm: [{status, detail?,
+      base_url, model}]`, only with `deep=true`; the plain response is unchanged.
+      `ChromaVectorStore.ping()` returns `False` on error, so `/health` reports `degraded`.
 
-Tests:
+Checked on 2026-10-27 against Google AI Studio, with a primary provider pointed at a closed port
+and Gemini as the fallback, and `gemini-embedding-001` for embeddings:
 
-- Fallback order when a provider returns 500 or times out.
-- No fallback once a stream has sent text.
-- Usage rows are written whether or not the provider reports usage.
-- The embedder sends batches of the configured size.
-- A model mismatch on an existing collection is refused.
-- The deep health check works against mocked providers.
+- Both sample files indexed through the remote embedder (3072-dimensional vectors).
+- The leave question was answered by the fallback in 2.5 s. Its two `llm_calls` rows: the dead
+  primary, failed in 1 ms with "Connection refused", then Gemini, 482 prompt and 18 completion
+  tokens, reported rather than estimated.
+- A streamed answer also fell back before any text, and its usage was reported (479 and 67).
+- `/health?deep=true` came back `degraded` in 0.9 s, naming the dead primary with its error and
+  Gemini as ok.
+- Installed in a fresh venv without the `local` extra: the default backend fails at startup with
+  the message, and the hashing backend runs and passes the deep health check.
+- Gemini embeddings score differently from MiniLM: unrelated questions scored 0.45 to 0.52 and
+  relevant ones 0.56 to 0.67, so `min_relevance_score` 0.15 filters nothing there. The README
+  suggests 0.55 for Gemini and says to tune it. The threshold stays per-deployment configuration.
+- The slim image (`LOCAL_EMBEDDINGS=false`) built locally at 817 MB. Run with the hashing
+  backend and one CPU, it was healthy in 2 s, passed the deep health check, and ingested and
+  answered a question. The torch-based default image is left to CI.
+
+Tests added:
+
+- Fallback order when the primary returns 500 or 429, times out, refuses connections or returns a
+  malformed body; the error when every provider fails; a single provider's error passed through.
+- A stream falls back before any text, and does not after.
+- Usage rows with reported counts, with estimated counts, and for a failed attempt followed by a
+  success; stream usage from a last text chunk and from a trailing chunk; `/stats` totals.
+- The embedder sends batches of the configured size, keeps input order, normalizes, accepts
+  responses without `index`, and raises on HTTP errors or a short response.
+- A model mismatch on an existing Chroma collection is refused (on an in-memory Chroma client).
+- The local backend without the extra fails with the message.
+- Deep health against the mock provider: ok, a failing provider, no provider, a failing embedder;
+  the plain response keeps its shape; Chroma ping returns False instead of raising.
+- Calls logged against the query id for `/query` and `/query/stream`; a failed query keeps its
+  rows. Fallback settings parsed from a JSON environment variable and validated.
 
 ## Phase 4: API-key authentication (row 10)
 

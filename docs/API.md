@@ -12,6 +12,36 @@ http://127.0.0.1:8000/api/v1
 curl http://127.0.0.1:8000/api/v1/health
 ```
 
+```json
+{"status": "ok", "sqlite": "ok", "chroma": "ok", "embedding_backend": "sentence-transformers"}
+```
+
+`status` is `degraded` when SQLite or ChromaDB can't be reached. The response is always HTTP 200.
+
+### Deep health check
+
+`?deep=true` also embeds a short test string and calls `GET /models` on each LLM provider, so it confirms the embedding model loads (or the embedding API answers) and that each provider is reachable with its key. It is slower, and the first call may load the local embedding model.
+
+```bash
+curl "http://127.0.0.1:8000/api/v1/health?deep=true"
+```
+
+```json
+{
+  "status": "degraded",
+  "sqlite": "ok",
+  "chroma": "ok",
+  "embedding_backend": "openai-compatible",
+  "embedder": {"status": "ok"},
+  "llm": [
+    {"status": "error", "detail": "[Errno 61] Connection refused", "base_url": "http://localhost:11434/v1", "model": "llama3.2:3b"},
+    {"status": "ok", "base_url": "https://generativelanguage.googleapis.com/v1beta/openai", "model": "gemini-2.5-flash"}
+  ]
+}
+```
+
+`llm` lists the primary provider first, then the fallbacks. It is empty with the extractive answer provider. `detail` is only present on errors.
+
 ## Ingest raw text
 
 ```bash
@@ -137,6 +167,17 @@ curl "http://127.0.0.1:8000/api/v1/queries?limit=10"
 ```bash
 curl http://127.0.0.1:8000/api/v1/stats
 ```
+
+```json
+{
+  "document_count": 2,
+  "vector_count": 9,
+  "query_count": 3,
+  "llm_usage": {"calls": 4, "failed_calls": 1, "prompt_tokens": 1441, "completion_tokens": 96}
+}
+```
+
+`llm_usage` totals every attempt to call an LLM provider, including failed ones and fallbacks. Token counts come from the provider's `usage` field; when a provider reports none, they are estimated at about four characters per token.
 
 ## Delete a document
 

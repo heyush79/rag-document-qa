@@ -2,12 +2,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import httpx
+
 from app.agents.answer_agent import AnswerAgent
 from app.agents.ingestion_agent import IngestionAgent
 from app.agents.orchestrator import RAGOrchestrator
 from app.agents.retrieval_agent import RetrievalAgent
 from app.config import Settings
-from app.db.repositories import AuditRepository, DocumentRepository, QueryRepository
+from app.db.repositories import (
+    AuditRepository,
+    DocumentRepository,
+    LLMCallRepository,
+    QueryRepository,
+)
 from app.db.sqlite import SQLiteDatabase
 from app.services.answer_generation import (
     AnswerGenerator,
@@ -16,8 +23,14 @@ from app.services.answer_generation import (
 )
 from app.services.chunking import TextChunker
 from app.services.document_service import DocumentService
-from app.services.embeddings import Embedder, HashingEmbedder, SentenceTransformerEmbedder
+from app.services.embeddings import (
+    Embedder,
+    HashingEmbedder,
+    OpenAICompatibleEmbedder,
+    SentenceTransformerEmbedder,
+)
 from app.services.file_parser import FileParser
+from app.services.llm import FallbackLLM, LLMProvider
 from app.services.vector_store import ChromaVectorStore, VectorStore
 
 
@@ -28,10 +41,43 @@ class ApplicationContainer:
     documents: DocumentRepository
     queries: QueryRepository
     audit: AuditRepository
+    llm_calls: LLMCallRepository
+    embedder: Embedder
     vector_store: VectorStore
+    # None when the extractive answer provider is configured.
+    llm: FallbackLLM | None
     file_parser: FileParser
     ingestion_agent: IngestionAgent
     rag_orchestrator: RAGOrchestrator
+
+
+def build_embedder(settings: Settings, client: httpx.Client) -> Embedder:
+    if settings.embedding_backend == "hashing":
+        return HashingEmbedder(settings.embedding_dimension)
+    if settings.embedding_backend == "openai-compatible":
+        return OpenAICompatibleEmbedder(
+            base_url=settings.embedding_base_url or "",
+            model=settings.embedding_model,
+            api_key=settings.embedding_api_key,
+            batch_size=settings.embedding_batch_size,
+            timeout_seconds=settings.llm_timeout_seconds,
+            client=client,
+        )
+    return SentenceTransformerEmbedder(settings.embedding_model)
+
+
+def llm_providers(settings: Settings) -> list[LLMProvider]:
+    """The primary provider from the RAG_LLM_* settings, then the configured fallbacks."""
+    primary = LLMProvider(
+        base_url=settings.llm_base_url or "",
+        model=settings.llm_model or "",
+        api_key=settings.llm_api_key,
+    )
+    fallbacks = [
+        LLMProvider(base_url=item.base_url, model=item.model, api_key=item.api_key)
+        for item in settings.llm_fallbacks
+    ]
+    return [primary, *fallbacks]
 
 
 def build_container(
@@ -40,19 +86,18 @@ def build_container(
     embedder: Embedder | None = None,
     vector_store: VectorStore | None = None,
     answer_generator: AnswerGenerator | None = None,
+    http_client: httpx.Client | None = None,
 ) -> ApplicationContainer:
     settings.ensure_data_directories()
     db = SQLiteDatabase(settings.sqlite_path)
     documents = DocumentRepository(db)
     queries = QueryRepository(db)
     audit = AuditRepository(db)
+    llm_calls = LLMCallRepository(db)
+    # Shared by the LLM and embedding clients; tests pass one backed by a mock transport.
+    http_client = http_client or httpx.Client()
 
-    if embedder is None:
-        if settings.embedding_backend == "hashing":
-            embedder = HashingEmbedder(settings.embedding_dimension)
-        else:
-            embedder = SentenceTransformerEmbedder(settings.embedding_model)
-
+    embedder = embedder or build_embedder(settings, http_client)
     vector_store = vector_store or ChromaVectorStore(
         embedder=embedder,
         collection_name=settings.chroma_collection,
@@ -70,14 +115,17 @@ def build_container(
         vector_store=vector_store,
     )
 
+    llm = None
+    if settings.answer_provider == "openai-compatible":
+        llm = FallbackLLM(
+            llm_providers(settings),
+            timeout_seconds=settings.llm_timeout_seconds,
+            calls=llm_calls,
+            client=http_client,
+        )
     if answer_generator is None:
-        if settings.answer_provider == "openai-compatible":
-            answer_generator = OpenAICompatibleAnswerGenerator(
-                base_url=settings.llm_base_url or "",
-                model=settings.llm_model or "",
-                api_key=settings.llm_api_key,
-                timeout_seconds=settings.llm_timeout_seconds,
-            )
+        if llm is not None:
+            answer_generator = OpenAICompatibleAnswerGenerator(llm)
         else:
             answer_generator = ExtractiveAnswerGenerator(settings.min_relevance_score)
 
@@ -93,7 +141,10 @@ def build_container(
         documents=documents,
         queries=queries,
         audit=audit,
+        llm_calls=llm_calls,
+        embedder=embedder,
         vector_store=vector_store,
+        llm=llm,
         file_parser=FileParser(),
         ingestion_agent=IngestionAgent(document_service),
         rag_orchestrator=RAGOrchestrator(
