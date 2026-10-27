@@ -6,6 +6,7 @@ from typing import Protocol
 import httpx
 
 from app.core.exceptions import UpstreamServiceError
+from app.services.prompting import build_answer_messages
 from app.services.vector_store import SearchHit
 
 
@@ -83,25 +84,8 @@ class OpenAICompatibleAnswerGenerator:
         self.client = client or httpx.Client()
 
     def generate(self, question: str, hits: list[SearchHit]) -> str:
-        if not hits:
-            return "I could not find enough relevant information in the indexed documents."
-        context = "\n\n".join(
-            f"[S{index}] {hit.document_title} | {hit.source}\n{hit.text}"
-            for index, hit in enumerate(hits, start=1)
-        )
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "Answer only from the supplied context. Cite factual statements with "
-                    "[S1], [S2], and so on. If the context is insufficient, state that clearly."
-                ),
-            },
-            {
-                "role": "user",
-                "content": f"Question: {question}\n\nContext:\n{context}",
-            },
-        ]
+        # Called even with no hits: the prompt then says nothing relevant was found.
+        messages = build_answer_messages(question, hits)
         try:
             response = self.client.post(
                 f"{self.base_url}/chat/completions",

@@ -32,6 +32,18 @@ class Settings(BaseSettings):
     llm_api_key: str | None = None
     llm_model: str | None = None
     llm_timeout_seconds: float = Field(default=60.0, gt=0)
+    llm_context_window: int = Field(
+        default=8192,
+        ge=512,
+        description="Context window of the answer model, in tokens. Retrieved chunks are "
+        "trimmed to fit it.",
+    )
+    llm_reserved_tokens: int = Field(
+        default=2000,
+        ge=0,
+        description="Tokens of the context window kept free for the system prompt, the "
+        "question and the answer. The rest, less a 10% margin, is the retrieval budget.",
+    )
 
     model_config = SettingsConfigDict(
         env_prefix="RAG_",
@@ -44,6 +56,8 @@ class Settings(BaseSettings):
     def validate_cross_field_settings(self) -> Settings:
         if self.chunk_overlap_words >= self.chunk_size_words:
             raise ValueError("chunk_overlap_words must be smaller than chunk_size_words")
+        if self.llm_reserved_tokens >= self.llm_context_window:
+            raise ValueError("llm_reserved_tokens must be smaller than llm_context_window")
         if self.answer_provider == "openai-compatible":
             missing = [
                 name
@@ -62,6 +76,11 @@ class Settings(BaseSettings):
     @property
     def max_upload_bytes(self) -> int:
         return self.max_upload_mb * 1024 * 1024
+
+    @property
+    def retrieval_token_budget(self) -> int:
+        """Tokens of retrieved chunks that one prompt may carry."""
+        return max(int((self.llm_context_window - self.llm_reserved_tokens) * 0.9), 100)
 
     def ensure_data_directories(self) -> None:
         self.sqlite_path.parent.mkdir(parents=True, exist_ok=True)

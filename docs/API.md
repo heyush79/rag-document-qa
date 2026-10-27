@@ -75,6 +75,8 @@ curl -X POST http://127.0.0.1:8000/api/v1/query \
 JSON
 ```
 
+`sources` lists only the chunks the answer was generated from: those scoring at least `RAG_MIN_RELEVANCE_SCORE` that fit the model's context budget, at most `top_k`. A citation `[Sn]` in the answer refers to `sources[n-1]`, the entry with `rank` n. It can be empty when nothing relevant was found.
+
 ## Ask within one document
 
 ```bash

@@ -81,7 +81,11 @@ def build_container(
         else:
             answer_generator = ExtractiveAnswerGenerator(settings.min_relevance_score)
 
-    retrieval_agent = RetrievalAgent(vector_store)
+    retrieval_agent = RetrievalAgent(
+        vector_store,
+        min_relevance_score=settings.min_relevance_score,
+        token_budget=settings.retrieval_token_budget,
+    )
     answer_agent = AnswerAgent(answer_generator)
     return ApplicationContainer(
         settings=settings,

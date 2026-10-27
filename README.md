@@ -18,7 +18,7 @@ The project ingests TXT, Markdown, and text-based PDF files, splits them into ov
 - Agent-style orchestration for ingestion, retrieval, and answer generation
 - Request IDs, processing-time headers, health checks, and structured errors
 - Dependency injection for deterministic tests
-- **32 passing Pytest tests**, run by GitHub Actions on every pull request
+- **46 passing Pytest tests**, run by GitHub Actions on every pull request
 - Architecture documentation
 
 ## Architecture at a glance
@@ -221,7 +221,9 @@ RAG_LLM_MODEL=llama3.2:3b
 
 Restart the API after changing `.env`.
 
-The answer prompt instructs the model to use only retrieved context, attach `[S1]`-style citations, and admit when context is insufficient. This reduces hallucination risk, although no prompt can abolish it completely. Humanity remains undefeated at inventing confident nonsense.
+Set `RAG_LLM_CONTEXT_WINDOW` to your model's context window in tokens (default 8192). Retrieved chunks are trimmed to fit it, after `RAG_LLM_RESERVED_TOKENS` (default 2000) are kept for the system prompt, question and answer.
+
+Retrieval asks the vector store for more chunks than `top_k`, drops any below `RAG_MIN_RELEVANCE_SCORE`, and keeps the best that fit the budget. The prompt wraps each chunk in a numbered `<document>` tag, tells the model the documents are reference data rather than instructions, and asks for `[S1]`-style citations. When nothing relevant is found, the model is told so instead of receiving an empty context. This reduces hallucination risk, although no prompt can abolish it completely. Humanity remains undefeated at inventing confident nonsense.
 
 ## Run tests
 
@@ -232,7 +234,7 @@ python -m pytest -q
 Expected result:
 
 ```text
-32 passed
+46 passed
 ```
 
 Coverage report:
@@ -279,7 +281,7 @@ rag-document-qa/
 │   └── IMPLEMENTATION_PLAN.md  # Roadmap for DocsGPT-inspired features
 ├── sample_data/
 ├── scripts/
-├── tests/                      # 32 tests
+├── tests/                      # 46 tests
 ├── .env.example
 ├── Dockerfile
 ├── docker-compose.yml

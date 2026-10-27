@@ -181,8 +181,10 @@ The Retrieval Agent:
 
 - Validates the question
 - Embeds it
-- Runs top-k vector search
+- Over-fetches from the vector store: `min(max(top_k * 2, 20), 500)` hits
 - Optionally filters to one document
+- Drops hits below `min_relevance_score`, whichever answer provider is configured
+- Keeps the best remaining hits, up to `top_k`, whose estimated tokens fit the retrieval budget: `max(int((llm_context_window - llm_reserved_tokens) * 0.9), 100)`, at about four characters per token
 - Returns normalized `SearchHit` objects
 
 ### Answer Agent
@@ -237,9 +239,9 @@ The score is convenient for clients, but it is not a calibrated probability. In 
 ## 10. Grounding and hallucination controls
 
 - The answer generator receives only retrieved chunks.
-- Every chunk is assigned a stable source label such as `[S1]`.
-- The LLM prompt instructs the model to cite sources and refuse unsupported answers.
-- The extractive fallback applies a minimum relevance threshold.
+- Every chunk is wrapped in a numbered `<document index="n">` tag and cited as `[Sn]`; the API's `sources` list is exactly those chunks, in that order.
+- The LLM prompt says the documents are reference data, not instructions, and asks the model to cite sources and refuse unsupported answers. Wrapper tags inside chunk text are escaped so a document can't close or fake a block.
+- A minimum relevance threshold applies to every answer provider. When nothing passes it, the LLM is told the search found nothing rather than receiving an empty context.
 - Source chunks are returned in the API response for verification.
 - Query-to-source rows are persisted for audit and evaluation.
 

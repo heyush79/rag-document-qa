@@ -16,7 +16,7 @@ from app.services.answer_generation import (
     OpenAICompatibleAnswerGenerator,
 )
 from app.services.embeddings import HashingEmbedder
-from app.services.vector_store import InMemoryVectorStore
+from app.services.vector_store import InMemoryVectorStore, SearchHit
 
 
 def chat_completion(content: str) -> dict[str, Any]:
@@ -114,6 +114,28 @@ def client(settings, vector_store):
     )
     with TestClient(app) as test_client:
         yield test_client
+
+
+@pytest.fixture
+def make_hit():
+    def factory(
+        index: int = 0,
+        score: float = 0.9,
+        text: str = "Employees receive twenty four paid leave days each year.",
+    ) -> SearchHit:
+        return SearchHit(
+            chunk_id=f"doc-1:{index}",
+            document_id="doc-1",
+            document_title="Doc",
+            source="test",
+            chunk_index=index,
+            text=text,
+            score=score,
+            start_char=0,
+            end_char=len(text),
+        )
+
+    return factory
 
 
 @pytest.fixture

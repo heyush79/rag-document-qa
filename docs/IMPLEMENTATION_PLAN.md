@@ -90,21 +90,27 @@ Tests added:
 
 ## Phase 1: Retrieval and prompt quality (rows 3 to 6)
 
+Status: done on branch `phase-1-retrieval`, waiting for review. 46 tests pass, and ruff reports
+nothing.
+
 Goal: send the model the best chunks that fit its context window, framed as data rather than
 instructions, and drop chunks that aren't relevant.
 
-- [ ] `app/services/tokens.py`: `estimate_tokens(text) = ceil(len(text) / 4)`. It needs no new
+- [x] `app/services/tokens.py`: `estimate_tokens(text) = ceil(len(text) / 4)`. It needs no new
       dependency and gives the same answer in every test run. It can be swapped for tiktoken later.
-- [ ] New settings: `llm_context_window` (default 8192) and `llm_reserved_tokens` (default 2000,
-      covering the system prompt, the question and a safety margin).
-- [ ] In `RetrievalAgent`:
+- [x] New settings: `llm_context_window` (default 8192) and `llm_reserved_tokens` (default 2000,
+      covering the system prompt, the question and the answer). Startup fails if the reserve is not
+      smaller than the window. `Settings.retrieval_token_budget` computes the budget.
+- [x] In `RetrievalAgent`:
   - Over-fetch from the store: `fetch_k = min(max(top_k * 2, 20), 500)`.
   - Drop hits below `min_relevance_score`. This now applies to every answer provider, not only the
     extractive one.
   - Walk the remaining hits in score order. Keep each one that fits under
     `budget = max(int((llm_context_window - llm_reserved_tokens) * 0.9), 100)`, skip any that would
     go over, and stop once `top_k` are kept. A hit costs `estimate_tokens(f"{title}\n{text}")`.
-- [ ] `app/services/prompting.py`, used by every LLM call. It wraps the hits like this:
+- [x] `app/services/prompting.py`, used by every LLM call. A system prompt is followed by one user
+      message: the documents block, then `Question: {question}` at the end. The block looks like
+      this:
 
   ```text
   <documents>
@@ -120,21 +126,36 @@ instructions, and drop chunks that aren't relevant.
   Answer only from it and cite sources as [S<index>]. If it does not answer the question, say so.
   ```
 
-  If a chunk's text contains `</document>` or `</documents>`, escape it so it can't close the
-  wrapper early.
-- [ ] When retrieval returns nothing, the LLM path replaces the documents block with "The search
-      returned no relevant documents." and still calls the model, so it can say so in its own words.
-      The extractive path keeps its fixed message.
-- [ ] The `sources` in a response are exactly the hits sent to the model, so `[S n]` always refers
+  Opening and closing `documents`, `document`, `source` and `content` tags inside chunk text, the
+  title or the source are escaped (`<` becomes `&lt;`), so they can't close a block early or fake a
+  new one.
+- [x] When retrieval returns nothing, the LLM path replaces the documents block with a note that
+      the search found nothing relevant and that the model shouldn't answer from general knowledge.
+      It still calls the model, so the model can say so in its own words. The extractive path keeps
+      its fixed message.
+- [x] The `sources` in a response are exactly the hits sent to the model, so `[S n]` always refers
       to `sources[n-1]`.
 
-Tests:
+API change to note: `sources` no longer lists chunks below `min_relevance_score`. Before, the
+extractive answerer ignored them, but they were still returned.
 
-- The store is asked for `fetch_k` hits.
-- Low-score hits are dropped on the LLM path.
-- A tiny context window trims hits to the budget.
-- The captured prompt contains the document tags and the "reference data" line, and contains the
-  "no relevant documents" line when retrieval finds nothing.
+Checked against the real MiniLM embedder and Chroma, using the sample data:
+
+- "How many paid leave days…" scored 0.554 and was kept.
+- Unrelated questions such as "capital of France" and "pasta recipe" scored 0.0 to 0.02, and
+  nothing was kept.
+- "Incident response process" scored 0.131 and was dropped. The handbook has no such process, so
+  that is correct.
+
+Tests added:
+
+- Fetch size and its bounds, and the store being asked for that many hits.
+- The `top_k` cap, the relevance threshold, and skipping hits over the token budget.
+- The budget computed from settings, and the validation of reserved tokens.
+- The LLM path seeing only relevant hits.
+- Document numbering, escaping of wrapper tags, the system prompt and the "reference data" note.
+- The "nothing found" note sent to the model.
+- `sources[n-1]` matching `<document index="n">` through the API.
 
 ## Phase 2: Streaming answers (row 1)
 
