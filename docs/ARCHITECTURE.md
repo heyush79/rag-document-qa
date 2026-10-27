@@ -167,6 +167,36 @@ sequenceDiagram
     API-->>User: JSON response
 ```
 
+### Streaming
+
+`POST /query/stream` runs the same retrieval and the same prompt, but sends the answer as Server-Sent Events while the model generates it.
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant API as FastAPI
+    participant O as RAG Orchestrator
+    participant G as Answer Generator
+    participant SQL as SQLite
+
+    User->>API: POST /query/stream
+    API->>O: stream(question, top_k, document_id)
+    O->>O: Retrieve hits (errors return JSON)
+    O-->>API: QueryStream with sources
+    API-->>User: source event
+    O->>G: stream(question, hits)
+    loop Each piece from the model
+        G-->>O: Text piece
+        O-->>API: Text piece
+        API-->>User: answer event
+    end
+    O->>SQL: Persist question, joined answer, sources
+    O-->>API: QueryResult
+    API-->>User: end event
+```
+
+Retrieval happens before the response starts, so its errors keep the JSON error shape and HTTP status. After that the status line has been sent, so a failure becomes a final `error` event. The query is saved only after the last piece, so a stream that fails or that the client abandons leaves nothing in SQLite, just as a failed `/query` doesn't.
+
 ## 6. Agent responsibilities
 
 ### Ingestion Agent
@@ -194,6 +224,8 @@ The Answer Agent abstracts answer generation. Two strategies are included:
 - `ExtractiveAnswerGenerator`: fully local and deterministic
 - `OpenAICompatibleAnswerGenerator`: calls `/v1/chat/completions`
 
+Each has `generate()`, which returns the whole answer, and `stream()`, which yields it in pieces. The OpenAI-compatible `stream()` sends `"stream": true` and reads the server's SSE `delta` chunks until `[DONE]`; the extractive one yields its whole answer once.
+
 ### RAG Orchestrator
 
 The orchestrator owns the full question-answering transaction:
@@ -203,6 +235,8 @@ The orchestrator owns the full question-answering transaction:
 3. Measure latency
 4. Persist query and source trace
 5. Return a stable API model
+
+`stream()` does the same, but returns the sources straight after retrieval and then yields the answer piece by piece, saving the query after the last one.
 
 ## 7. Chunking strategy
 
@@ -256,6 +290,8 @@ The score is convenient for clients, but it is not a calibrated probability. In 
 | Duplicate content | Existing document returned with HTTP 200 |
 | Embedding/index failure | Document marked failed; partial vectors deleted |
 | LLM HTTP/JSON failure | HTTP 502 |
+| LLM failure during a stream | Final `error` event; query not saved |
+| Client disconnects during a stream | The app stops reading the model's stream; query not saved |
 | Embedding-model mismatch | HTTP 409 with remediation guidance |
 
 ## 12. Observability

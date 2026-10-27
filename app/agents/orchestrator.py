@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 import uuid
+from collections.abc import Iterator
 from dataclasses import dataclass
 
 from app.agents.answer_agent import AnswerAgent
@@ -17,6 +18,14 @@ class QueryResult:
     answer: str
     sources: list[SearchHit]
     latency_ms: float
+
+
+@dataclass(frozen=True)
+class QueryStream:
+    """A streamed answer. `events` yields pieces of answer text, then the saved QueryResult."""
+
+    sources: list[SearchHit]
+    events: Iterator[str | QueryResult]
 
 
 class RAGOrchestrator:
@@ -47,6 +56,57 @@ class RAGOrchestrator:
             document_id=document_id,
         )
         answer = self.answer_agent.run(question=question, hits=hits)
+        return self._save(question=question, answer=answer, top_k=top_k, hits=hits, started=started)
+
+    def stream(
+        self,
+        *,
+        question: str,
+        top_k: int,
+        document_id: str | None = None,
+    ) -> QueryStream:
+        """Retrieves before returning, so retrieval errors raise before anything is streamed."""
+        started = time.perf_counter()
+        hits = self.retrieval_agent.run(
+            question=question,
+            top_k=top_k,
+            document_id=document_id,
+        )
+        return QueryStream(
+            sources=hits,
+            events=self._stream_answer(question=question, top_k=top_k, hits=hits, started=started),
+        )
+
+    def _stream_answer(
+        self,
+        *,
+        question: str,
+        top_k: int,
+        hits: list[SearchHit],
+        started: float,
+    ) -> Iterator[str | QueryResult]:
+        pieces: list[str] = []
+        for piece in self.answer_agent.stream(question=question, hits=hits):
+            pieces.append(piece)
+            yield piece
+        # Only reached when the answer stream completes, so a failed stream saves nothing.
+        yield self._save(
+            question=question,
+            answer="".join(pieces).strip(),
+            top_k=top_k,
+            hits=hits,
+            started=started,
+        )
+
+    def _save(
+        self,
+        *,
+        question: str,
+        answer: str,
+        top_k: int,
+        hits: list[SearchHit],
+        started: float,
+    ) -> QueryResult:
         latency_ms = round((time.perf_counter() - started) * 1000, 3)
         query_id = str(uuid.uuid4())
         self.query_repository.create(

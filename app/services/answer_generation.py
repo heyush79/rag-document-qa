@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import re
+from collections.abc import Iterator
 from typing import Protocol
 
 import httpx
@@ -12,6 +14,8 @@ from app.services.vector_store import SearchHit
 
 class AnswerGenerator(Protocol):
     def generate(self, question: str, hits: list[SearchHit]) -> str: ...
+
+    def stream(self, question: str, hits: list[SearchHit]) -> Iterator[str]: ...
 
 
 class ExtractiveAnswerGenerator:
@@ -65,6 +69,9 @@ class ExtractiveAnswerGenerator:
             return f"{top.text[:700].strip()} [S1]"
         return " ".join(selected)
 
+    def stream(self, question: str, hits: list[SearchHit]) -> Iterator[str]:
+        yield self.generate(question, hits)
+
 
 class OpenAICompatibleAnswerGenerator:
     def __init__(
@@ -97,4 +104,41 @@ class OpenAICompatibleAnswerGenerator:
             payload = response.json()
             return str(payload["choices"][0]["message"]["content"]).strip()
         except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as exc:
+            raise UpstreamServiceError(f"Answer model request failed: {exc}") from exc
+
+    def stream(self, question: str, hits: list[SearchHit]) -> Iterator[str]:
+        """Yields the answer as the server sends it, from an SSE `"stream": true` response."""
+        messages = build_answer_messages(question, hits)
+        try:
+            with self.client.stream(
+                "POST",
+                f"{self.base_url}/chat/completions",
+                headers={"Authorization": f"Bearer {self.api_key}"},
+                json={
+                    "model": self.model,
+                    "messages": messages,
+                    "temperature": 0.1,
+                    "stream": True,
+                },
+                timeout=self.timeout_seconds,
+            ) as response:
+                response.raise_for_status()
+                for line in response.iter_lines():
+                    if not line.startswith("data:"):
+                        continue  # blank separators, comments and other SSE fields
+                    data = line.removeprefix("data:").strip()
+                    if data == "[DONE]":
+                        return
+                    chunk = json.loads(data)
+                    if "error" in chunk:
+                        raise UpstreamServiceError(
+                            f"Answer model stream failed: {chunk['error']}"
+                        )
+                    choices = chunk.get("choices") or []  # empty in usage-only chunks
+                    piece = (choices[0].get("delta") or {}).get("content") if choices else None
+                    if piece:
+                        yield piece
+        except (
+            httpx.HTTPError, AttributeError, KeyError, IndexError, TypeError, ValueError
+        ) as exc:
             raise UpstreamServiceError(f"Answer model request failed: {exc}") from exc

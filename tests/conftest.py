@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import Iterator
 from typing import Any
 
 import httpx
@@ -31,11 +32,26 @@ def chat_completion(content: str) -> dict[str, Any]:
     }
 
 
+def chat_chunk(delta: dict[str, Any], finish_reason: str | None = None) -> str:
+    choice = {"index": 0, "delta": delta, "finish_reason": finish_reason}
+    return f"data: {json.dumps({'choices': [choice]})}"
+
+
+def streamed_lines(*pieces: str) -> list[str]:
+    """SSE lines shaped like an OpenAI-compatible server's, without the closing [DONE]."""
+    return [
+        chat_chunk({"role": "assistant"}),
+        *(chat_chunk({"content": piece}) for piece in pieces),
+        chat_chunk({}, finish_reason="stop"),
+    ]
+
+
 class MockLLM:
     """Stands in for an OpenAI-compatible server: records requests and replies from a queue."""
 
     base_url = "http://mock-llm/v1"
-    default_answer = "Mock answer. [S1]"
+    default_pieces = ("Mock", " answer.", " [S1]")
+    default_answer = "".join(default_pieces)
 
     def __init__(self) -> None:
         self.requests: list[httpx.Request] = []
@@ -48,6 +64,26 @@ class MockLLM:
     def fail(self, status_code: int = 500) -> None:
         self._responses.append(
             httpx.Response(status_code, json={"error": {"message": "mock failure"}})
+        )
+
+    def stream_reply(self, *pieces: str, error: Exception | None = None) -> None:
+        """Queues a streamed answer. With `error`, the stream raises it instead of finishing."""
+        lines = streamed_lines(*pieces)
+        if error is None:
+            lines.append("data: [DONE]")
+        self.stream_lines(*lines, error=error)
+
+    def stream_lines(self, *lines: str, error: Exception | None = None) -> None:
+        """Queues an SSE response with exactly these lines, for testing the parser."""
+
+        def body() -> Iterator[bytes]:
+            for line in lines:
+                yield f"{line}\n\n".encode()
+            if error is not None:
+                raise error
+
+        self._responses.append(
+            httpx.Response(200, headers={"content-type": "text/event-stream"}, content=body())
         )
 
     def last_json(self) -> dict[str, Any]:
@@ -65,6 +101,9 @@ class MockLLM:
     def _handle(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
         if self._responses:
+            return self._responses.pop(0)
+        if json.loads(request.content).get("stream"):
+            self.stream_reply(*self.default_pieces)
             return self._responses.pop(0)
         return httpx.Response(200, json=chat_completion(self.default_answer))
 

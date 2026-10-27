@@ -1,8 +1,15 @@
 from __future__ import annotations
 
+import json
+import logging
+from collections.abc import Iterator
+from typing import Any
+
 from fastapi import APIRouter, File, Form, Query, Request, Response, UploadFile, status
 from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import StreamingResponse
 
+from app.agents.orchestrator import QueryResult, QueryStream
 from app.container import ApplicationContainer
 from app.core.exceptions import AppError
 from app.schemas import (
@@ -16,6 +23,9 @@ from app.schemas import (
     StatsResponse,
     TextDocumentRequest,
 )
+from app.services.vector_store import SearchHit
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -35,6 +45,53 @@ def document_response(record, *, duplicate: bool = False) -> DocumentResponse:
         created_at=record.created_at,
         duplicate=duplicate,
     )
+
+
+def source_responses(hits: list[SearchHit]) -> list[SourceResponse]:
+    return [
+        SourceResponse(
+            rank=rank,
+            chunk_id=hit.chunk_id,
+            document_id=hit.document_id,
+            document_title=hit.document_title,
+            source=hit.source,
+            chunk_index=hit.chunk_index,
+            text=hit.text,
+            score=hit.score,
+            start_char=hit.start_char,
+            end_char=hit.end_char,
+        )
+        for rank, hit in enumerate(hits, start=1)
+    ]
+
+
+def sse(event: dict[str, Any]) -> str:
+    return f"data: {json.dumps(event)}\n\n"
+
+
+def sse_events(stream: QueryStream) -> Iterator[str]:
+    yield sse(
+        {
+            "type": "source",
+            "sources": [source.model_dump() for source in source_responses(stream.sources)],
+        }
+    )
+    # The status line is already sent, so failures from here on become an error event.
+    try:
+        for event in stream.events:
+            if isinstance(event, QueryResult):
+                yield sse(
+                    {"type": "end", "query_id": event.query_id, "latency_ms": event.latency_ms}
+                )
+            else:
+                yield sse({"type": "answer", "answer": event})
+    except AppError as exc:
+        yield sse({"type": "error", "error": exc.code, "message": exc.message})
+    except Exception:
+        logger.exception("Answer stream failed")
+        yield sse(
+            {"type": "error", "error": "internal_error", "message": "The answer stream failed"}
+        )
 
 
 @router.get("/health", response_model=HealthResponse, tags=["system"])
@@ -146,21 +203,35 @@ def query_documents(payload: QueryRequest, request: Request) -> QueryResponse:
         question=result.question,
         answer=result.answer,
         latency_ms=result.latency_ms,
-        sources=[
-            SourceResponse(
-                rank=rank,
-                chunk_id=hit.chunk_id,
-                document_id=hit.document_id,
-                document_title=hit.document_title,
-                source=hit.source,
-                chunk_index=hit.chunk_index,
-                text=hit.text,
-                score=hit.score,
-                start_char=hit.start_char,
-                end_char=hit.end_char,
-            )
-            for rank, hit in enumerate(result.sources, start=1)
-        ],
+        sources=source_responses(result.sources),
+    )
+
+
+@router.post(
+    "/query/stream",
+    response_class=StreamingResponse,
+    responses={
+        200: {
+            "content": {"text/event-stream": {}},
+            "description": "Server-Sent Events: one `source` event, then `answer` events, "
+            "then `end` or `error`.",
+        }
+    },
+    tags=["query"],
+)
+def stream_query(payload: QueryRequest, request: Request) -> StreamingResponse:
+    container = container_from(request)
+    top_k = payload.top_k or container.settings.default_top_k
+    # Retrieval runs here, before the response starts, so its errors keep the JSON error shape.
+    stream = container.rag_orchestrator.stream(
+        question=payload.question,
+        top_k=top_k,
+        document_id=payload.document_id,
+    )
+    return StreamingResponse(
+        sse_events(stream),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 

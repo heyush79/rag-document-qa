@@ -15,10 +15,11 @@ The project ingests TXT, Markdown, and text-based PDF files, splits them into ov
 - SQLite document metadata, query history, source traces, and audit events
 - Offline extractive answer generator, so the application works without an LLM key
 - Optional OpenAI-compatible answer generator for a local or hosted model
+- Streaming answers as Server-Sent Events
 - Agent-style orchestration for ingestion, retrieval, and answer generation
 - Request IDs, processing-time headers, health checks, and structured errors
 - Dependency injection for deterministic tests
-- **46 passing Pytest tests**, run by GitHub Actions on every pull request
+- **55 passing Pytest tests**, run by GitHub Actions on every pull request
 - Architecture documentation
 
 ## Architecture at a glance
@@ -189,6 +190,18 @@ Example response shape:
 }
 ```
 
+### Stream the answer
+
+`/api/v1/query/stream` takes the same body and sends the answer as Server-Sent Events while the model writes it: a `source` event first, then `answer` events with the next piece of text, then `end` (or `error`). `-N` stops curl from buffering:
+
+```bash
+curl -N -X POST "http://127.0.0.1:8000/api/v1/query/stream" \
+  -H "Content-Type: application/json" \
+  -d '{"question": "How many paid leave days do employees receive?"}'
+```
+
+The event format is in [docs/API.md](docs/API.md#stream-an-answer).
+
 ## API endpoints
 
 | Method | Endpoint | Purpose |
@@ -201,16 +214,17 @@ Example response shape:
 | GET | `/api/v1/documents/{id}` | Get document metadata |
 | DELETE | `/api/v1/documents/{id}` | Delete metadata and vectors |
 | POST | `/api/v1/query` | Retrieve chunks and answer |
+| POST | `/api/v1/query/stream` | Same, with the answer streamed as Server-Sent Events |
 | GET | `/api/v1/queries` | Recent query history |
 | GET | `/api/v1/stats` | Document, vector, and query counts |
 
 More examples are in [docs/API.md](docs/API.md).
 
-## Use an OpenAI-compatible local model
+## Use an OpenAI-compatible model
 
-The application works in offline extractive mode by default. To use a generative model, configure any endpoint that implements `/v1/chat/completions`.
+The application works in offline extractive mode by default. To use a generative model, configure any endpoint that implements `/v1/chat/completions`. For `/query/stream` it must also support `"stream": true`, as Ollama, vLLM, OpenAI and Gemini do.
 
-Example for an OpenAI-compatible local server:
+Example for a local Ollama server:
 
 ```env
 RAG_ANSWER_PROVIDER=openai-compatible
@@ -219,7 +233,16 @@ RAG_LLM_API_KEY=local-key
 RAG_LLM_MODEL=llama3.2:3b
 ```
 
-Restart the API after changing `.env`.
+Example for Google AI Studio, which has a free tier. Create a key at aistudio.google.com:
+
+```env
+RAG_ANSWER_PROVIDER=openai-compatible
+RAG_LLM_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
+RAG_LLM_API_KEY=your-ai-studio-key
+RAG_LLM_MODEL=gemini-2.5-flash
+```
+
+Restart the API after changing `.env`. Keep keys in `.env`, which git ignores, never in `.env.example`.
 
 Set `RAG_LLM_CONTEXT_WINDOW` to your model's context window in tokens (default 8192). Retrieved chunks are trimmed to fit it, after `RAG_LLM_RESERVED_TOKENS` (default 2000) are kept for the system prompt, question and answer.
 
@@ -234,7 +257,7 @@ python -m pytest -q
 Expected result:
 
 ```text
-46 passed
+55 passed
 ```
 
 Coverage report:
@@ -281,7 +304,7 @@ rag-document-qa/
 │   └── IMPLEMENTATION_PLAN.md  # Roadmap for DocsGPT-inspired features
 ├── sample_data/
 ├── scripts/
-├── tests/                      # 46 tests
+├── tests/                      # 55 tests
 ├── .env.example
 ├── Dockerfile
 ├── docker-compose.yml
