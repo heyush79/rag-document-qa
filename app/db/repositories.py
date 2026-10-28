@@ -112,6 +112,13 @@ class DocumentRepository:
             ).fetchall()
         return [DocumentRecord(**dict(row)) for row in rows]
 
+    def list_processing_ids(self) -> list[str]:
+        with self.db.connect() as connection:
+            rows = connection.execute(
+                "SELECT id FROM documents WHERE status = 'processing' ORDER BY created_at"
+            ).fetchall()
+        return [row["id"] for row in rows]
+
     def ids_in_collection(self, collection_id: str) -> list[str]:
         with self.db.connect() as connection:
             rows = connection.execute(

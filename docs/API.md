@@ -174,11 +174,30 @@ curl -X POST http://127.0.0.1:8000/api/v1/documents/upload \
 
 Supported types:
 
-- `.txt`
-- `.md`
-- `.pdf`
+- `.txt`, `.md`: UTF-8 text
+- `.pdf`: text-based PDF; the file must start with `%PDF-`
+- `.docx`: paragraphs in order, then tables one row per line; the file must be a real DOCX archive
+- `.html`, `.htm`: visible text, with `script` and `style` dropped
+- `.csv`: one `column: value` line per field, a blank line between rows
 
-Scanned image-only PDFs require OCR, which is deliberately not hidden behind wishful thinking in this version.
+A file whose extension and contents disagree, such as a text file renamed to `.pdf`, is a 415, as is anything with no extractable text. Scanned image-only PDFs require OCR, which is deliberately not hidden behind wishful thinking in this version.
+
+Add `-F "collection_id=COLLECTION_ID"` to upload into a collection.
+
+### Background ingestion
+
+Both ingestion routes accept `?background=true`. The document is parsed and registered in the request, then answered with `202` and `"status": "processing"` while chunking and embedding continue in the background:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/api/v1/documents/upload?background=true" \
+  -F "file=@large-manual.pdf"
+```
+
+```json
+{"id": "e2c1...", "status": "processing", "chunk_count": 0, "duplicate": false, "...": "..."}
+```
+
+Poll `GET /documents/{id}` until `status` is `ready` (with its `chunk_count`) or `failed` (with `error_message`). An unsupported file still gets its 415 straight away, and a duplicate still gets the existing document with a 200. The text is held in memory, never written to disk: if the app restarts while a document is processing, it is marked `failed` with "interrupted by restart; upload again".
 
 ## List documents
 

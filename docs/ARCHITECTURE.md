@@ -127,8 +127,8 @@ sequenceDiagram
 
 ### Ingestion design details
 
-1. **File validation**: TXT, Markdown, and PDF are accepted. Upload size is capped.
-2. **Text extraction**: Text files are decoded as UTF-8. PDF pages are parsed with `pypdf`.
+1. **File validation**: TXT, Markdown, PDF, DOCX, HTML and CSV are accepted, by extension. PDF and DOCX files must also start with the right bytes (`%PDF-`, and the zip signature for DOCX), so a renamed file is refused rather than failing inside a parser. Upload size is capped.
+2. **Text extraction**: Text, HTML and CSV files are decoded as UTF-8. PDF pages are parsed with `pypdf`, DOCX paragraphs and tables with `python-docx`. HTML goes through the standard library's `html.parser`, keeping visible text, starting a new line at block elements and dropping `script`, `style` and `noscript`. CSV rows become "column: value" lines with a blank line between rows, so a row's fields stay together when chunked.
 3. **Deduplication**: A SHA-256 hash of normalized text prevents duplicate vector storage. The hash is unique per collection, so the same text may be indexed once in each collection it is added to.
 4. **Lifecycle state**: SQLite first records the document as `processing`.
 5. **Chunking**: Text is split by word count with overlap. Each chunk records source character offsets.
@@ -138,6 +138,12 @@ sequenceDiagram
 9. **Compensation**: If indexing fails, partial vectors are deleted and the SQLite row is marked `failed`.
 
 The two stores cannot participate in one ACID transaction. The service therefore uses a small saga-style workflow with compensating cleanup. In a distributed version, an outbox and repair worker would make this more durable.
+
+### Background ingestion
+
+`DocumentService` splits the work into `register()`, which validates the text, detects a duplicate and creates the `processing` row, and `index()`, which chunks, embeds, indexes and marks the document `ready`. With `?background=true` the request runs `register()` (and, for uploads, the parser) before answering, so unsupported files and duplicates are reported at once, then hands `index()` to a FastAPI background task with the text held in memory and answers 202. Clients poll `GET /documents/{id}`.
+
+Nothing is queued durably: if the process stops mid-task, the text is gone, because uploaded files are never written to disk. At startup the app marks every document still `processing` as `failed` with "interrupted by restart; upload again" and removes any vectors it left behind. A durable queue would be the next step if ingestion ever needs to survive restarts.
 
 ## 5. Query flow
 
@@ -326,7 +332,9 @@ Any valid key sees all data; per-tenant authorization is still to do.
 | Failure | Current behavior |
 |---|---|
 | Empty text or question | HTTP 400 |
-| Unsupported file type | HTTP 415 |
+| Unsupported file type, or a PDF/DOCX whose bytes say otherwise | HTTP 415 |
+| Background indexing fails | Document marked `failed` with the error; poll shows it |
+| Restart during background indexing | Document marked `failed` at startup ("interrupted by restart; upload again") |
 | Oversized upload | HTTP 413 |
 | Missing document | HTTP 404 |
 | Missing, unknown or revoked API key | HTTP 401 with `WWW-Authenticate: Bearer` |
@@ -370,7 +378,7 @@ Every LLM call attempt is logged in `llm_calls`, and `GET /stats` totals the cal
 - One FastAPI process
 - Local SQLite
 - Local persistent ChromaDB
-- Synchronous ingestion
+- Ingestion in the request, or in an in-process background task
 
 ### Medium scale
 

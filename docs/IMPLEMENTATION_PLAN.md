@@ -371,8 +371,7 @@ and without cascade, and the undeletable default.
 
 ### 5b: Conversations
 
-Status: done on branch `phase-5b-conversations`, waiting for review. 148 tests pass, and ruff
-reports nothing.
+Status: done and committed (`a06d6ba`). 148 tests pass, and ruff reports nothing.
 
 - [x] Migration 5 adds `conversations(id, collection_id, title, created_at, updated_at)` and
       `messages(id, conversation_id, role, content, query_id, created_at)`. Deleting a
@@ -428,24 +427,52 @@ in case the app ever moves to a host that wipes its disk on restart.
 
 ## Phase 7: Ingestion and safety extras (rows 11, 15, 16)
 
+7a and 7b are one branch (`phase-7ab-ingestion`), 7c follows on its own.
+
 ### 7a: Background ingestion
 
-- [ ] Split `DocumentService.ingest_text` into `register()`, which hashes the text, checks for a
-      duplicate and creates the `processing` row, and `index(document_id, text)`.
-- [ ] Add `?background=true` to both ingestion routes. The request still parses and registers the
-      document, so a bad file still gets 415 right away. It then runs `index()` in FastAPI
-      `BackgroundTasks` with the text held in memory, and returns 202. Clients poll
-      `GET /documents/{id}`. Synchronous ingestion stays the default.
-- [ ] On startup, mark any document left in `processing` as `failed` with the message
-      "interrupted by restart; upload again". Its text was never stored, so it can't be resumed.
+Status: done on branch `phase-7ab-ingestion`, waiting for review. 169 tests pass (with 7b), and
+ruff reports nothing.
+
+- [x] `DocumentService.ingest_text` is now `register()`, which hashes the text, checks for a
+      duplicate and creates the `processing` row, followed by `index(document_id, text)`, which
+      chunks, embeds, indexes and marks the document ready, or failed with the error.
+- [x] `?background=true` on both ingestion routes. The request still parses and registers the
+      document, so a bad file still gets 415 right away and a duplicate its 200. It then runs
+      `index()` in FastAPI `BackgroundTasks` with the text held in memory, and returns 202 with
+      the `processing` document. Clients poll `GET /documents/{id}`. Synchronous ingestion stays
+      the default. The background wrapper swallows the error after `index()` has logged it and
+      marked the document failed, so the server doesn't log it twice.
+- [x] On startup, after the migrations, any document left in `processing` is marked `failed`
+      with "interrupted by restart; upload again" and its vectors, if any, are deleted. Its text
+      was never stored, so it can't be resumed.
 
 ### 7b: More file types
 
-- [ ] DOCX through `python-docx`. HTML through the standard library's `html.parser`, dropping
-      `script` and `style`. CSV through the `csv` module, with one "column: value" line per field
-      and a blank line between rows so they chunk sensibly.
-- [ ] Check the leading bytes of PDF and DOCX files to confirm the type, not just the extension.
-      OCR and audio stay out of scope.
+Status: done with 7a.
+
+- [x] DOCX through `python-docx` (paragraphs in order, then tables one row per line). HTML
+      through the standard library's `html.parser`, dropping `script`, `style` and `noscript`,
+      with a new line at each block element. CSV through the `csv` module, with one
+      "column: value" line per field and a blank line between rows so they chunk sensibly.
+      `.htm` counts as HTML. Text, HTML and CSV must be UTF-8, as text files already had to be.
+- [x] PDF (`%PDF-`) and DOCX (the zip signature) files must start with the right bytes, not just
+      carry the extension. OCR and audio stay out of scope.
+
+Checked on 2026-10-28 against uvicorn with the MiniLM embedder: a 41-chunk document posted with
+`?background=true` got its 202 in 0.02 s and was `ready` 9.6 s later (the first embedding call
+also loads the model); the same text posted synchronously afterwards took 0.18 s. DOCX, HTML and
+CSV uploads were indexed and a question was answered from the CSV. A text file named `fake.pdf`
+was refused with "The file does not look like a PDF".
+
+Tests added: background text and upload ingestion answer 202 and reach `ready`; a background
+duplicate gets the 200; a bad file and an unknown collection are refused at once; a failing
+vector store leaves the document `failed` with its error and no vectors; a document left
+`processing` is failed at startup with its vectors removed while a healthy one is untouched.
+For the parser: HTML text with scripts, styles and `noscript` dropped, `.htm`, CSV blocks and
+extra values, DOCX paragraphs and tables, the magic-byte checks, a broken DOCX, empty HTML, a
+non-UTF-8 CSV, an unsupported extension and the message listing the types; each new type
+uploaded through the API and found by a query.
 
 ### 7c: Guardrails
 

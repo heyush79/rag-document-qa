@@ -43,6 +43,13 @@ def create_app(
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         container.db.initialize()
+        interrupted = container.ingestion_agent.document_service.fail_interrupted()
+        if interrupted:
+            logger.warning(
+                "%d document(s) were still processing when the app last stopped and are now "
+                "marked failed; upload them again",
+                len(interrupted),
+            )
         if not resolved_settings.auth_enabled:
             logger.warning(
                 "API authentication is disabled (RAG_AUTH_ENABLED=false): every route is open"

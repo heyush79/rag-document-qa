@@ -1,0 +1,5 @@
+team,lead,location,on_call_channel,core_hours
+Platform,Ada Lovelace,London,#platform-oncall,10:00-16:00 GMT
+Data,Grace Hopper,Arlington,#data-oncall,10:00-16:00 ET
+Mobile,Katherine Johnson,Hampton,#mobile-oncall,09:00-15:00 ET
+Security,Dorothy Vaughan,Hampton,#security,24x7 rotation

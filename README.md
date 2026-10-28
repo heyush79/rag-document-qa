@@ -2,12 +2,12 @@
 
 A production-style local Retrieval-Augmented Generation service built with **Python, FastAPI, ChromaDB, Sentence Transformers, SQLite, and Pytest**.
 
-The project ingests TXT, Markdown, and text-based PDF files, splits them into overlapping chunks, generates embeddings, stores vectors in ChromaDB, keeps operational metadata in SQLite, retrieves relevant chunks for a question, and returns a grounded answer with source references.
+The project ingests TXT, Markdown, text-based PDF, DOCX, HTML and CSV files, splits them into overlapping chunks, generates embeddings, stores vectors in ChromaDB, keeps operational metadata in SQLite, retrieves relevant chunks for a question, and returns a grounded answer with source references.
 
 ## What is included
 
 - FastAPI REST API with Swagger documentation
-- Text, Markdown, and PDF ingestion
+- Text, Markdown, PDF, DOCX, HTML and CSV ingestion, synchronous or in the background
 - Collections that group documents, with per-collection duplicate detection and scoped search
 - Conversations: follow-up questions are rewritten into standalone search queries and answered with the earlier turns as context
 - SHA-256 content deduplication
@@ -22,7 +22,7 @@ The project ingests TXT, Markdown, and text-based PDF files, splits them into ov
 - API-key authentication, off by default, with admin-managed keys stored as hashes
 - Request IDs, processing-time headers, health checks with an optional deep provider check, and structured errors
 - Dependency injection for deterministic tests
-- **148 passing Pytest tests**, run by GitHub Actions on every pull request
+- **169 passing Pytest tests**, run by GitHub Actions on every pull request
 - Architecture documentation
 
 ## Architecture at a glance
@@ -151,13 +151,17 @@ Or ingest the provided sample file while the server is running:
 python scripts/ingest_sample.py
 ```
 
-### Upload a TXT, Markdown, or PDF file
+### Upload a file
 
 ```bash
 curl -X POST "http://127.0.0.1:8000/api/v1/documents/upload" \
   -F "file=@sample_data/company_handbook.md" \
   -F "title=Acme Engineering Handbook"
 ```
+
+TXT, Markdown, text-based PDF, DOCX, HTML and CSV are accepted, by extension and, for PDF and DOCX, by checking the file's leading bytes. HTML keeps the visible text and drops scripts and styles; CSV becomes one "column: value" block per row. Scanned PDFs and audio are out of scope.
+
+Add `?background=true` to either ingestion route to get a `202` as soon as the document is registered, with chunking and embedding continuing in the background. Poll `GET /api/v1/documents/{id}` until its `status` is `ready` or `failed`. A bad file still gets its 415 at once, and a duplicate still gets the existing document with a 200. The text is held in memory for the task, never written to disk, so a document that was still processing when the app restarts is marked `failed` at startup with "interrupted by restart; upload again".
 
 ### Ask a question
 
@@ -217,8 +221,8 @@ The event format is in [docs/API.md](docs/API.md#stream-an-answer).
 | GET | `/api/v1/collections` | List collections with document counts |
 | GET | `/api/v1/collections/{id}` | Get one collection |
 | DELETE | `/api/v1/collections/{id}` | Delete an empty collection, or everything in it with `?cascade=true` |
-| POST | `/api/v1/documents/text` | Ingest raw text, optionally into a collection |
-| POST | `/api/v1/documents/upload` | Upload TXT, MD, or PDF, optionally into a collection |
+| POST | `/api/v1/documents/text` | Ingest raw text, optionally into a collection; `?background=true` returns 202 at once |
+| POST | `/api/v1/documents/upload` | Upload TXT, MD, PDF, DOCX, HTML or CSV, optionally into a collection; `?background=true` as above |
 | GET | `/api/v1/documents` | List documents, optionally by collection |
 | GET | `/api/v1/documents/{id}` | Get document metadata |
 | DELETE | `/api/v1/documents/{id}` | Delete metadata and vectors |
@@ -371,7 +375,7 @@ python -m pytest -q
 Expected result:
 
 ```text
-148 passed
+169 passed
 ```
 
 Coverage report:
@@ -420,7 +424,7 @@ rag-document-qa/
 │   └── IMPLEMENTATION_PLAN.md  # Roadmap for DocsGPT-inspired features
 ├── sample_data/
 ├── scripts/
-├── tests/                      # 148 tests
+├── tests/                      # 169 tests
 ├── .env.example
 ├── Dockerfile
 ├── docker-compose.yml
@@ -433,4 +437,4 @@ rag-document-qa/
 
 This is production-style, not a claim that a single-process laptop service should run a bank.
 
-For a larger deployment, add per-tenant authorization, object storage for originals, malware scanning, OCR for scanned PDFs, background ingestion jobs, reranking, evaluation datasets, metrics export, distributed tracing, rate limiting, a managed vector database, and a queue-backed consistency repair process.
+For a larger deployment, add per-tenant authorization, object storage for originals, malware scanning, OCR for scanned PDFs, a durable job queue for ingestion, reranking, evaluation datasets, metrics export, distributed tracing, rate limiting, a managed vector database, and a queue-backed consistency repair process.

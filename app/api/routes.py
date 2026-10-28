@@ -8,6 +8,7 @@ from typing import Any
 
 from fastapi import (
     APIRouter,
+    BackgroundTasks,
     Depends,
     File,
     Form,
@@ -20,6 +21,7 @@ from fastapi import (
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
 
+from app.agents.ingestion_agent import IngestionAgent
 from app.agents.orchestrator import QueryResult, QueryStream
 from app.api.auth import require_admin_key, require_api_key
 from app.container import ApplicationContainer
@@ -51,6 +53,7 @@ from app.schemas import (
     StatsResponse,
     TextDocumentRequest,
 )
+from app.services.document_service import Registration
 from app.services.vector_store import SearchHit
 
 logger = logging.getLogger(__name__)
@@ -181,16 +184,60 @@ def health(
     )
 
 
+BACKGROUND_DESCRIPTION = (
+    "Register the document and answer 202 at once; chunking and embedding continue in the "
+    "background. Poll GET /documents/{id} until its status is ready or failed."
+)
+INGEST_RESPONSES = {
+    200: {"model": DocumentResponse, "description": "A duplicate: the existing document."},
+    202: {
+        "model": DocumentResponse,
+        "description": "Registered as processing; indexing continues in the background.",
+    },
+}
+
+
+def queue_indexing(
+    agent: IngestionAgent,
+    background_tasks: BackgroundTasks,
+    response: Response,
+    registration: Registration,
+) -> DocumentResponse:
+    if registration.duplicate:
+        response.status_code = status.HTTP_200_OK
+        return document_response(registration.document, duplicate=True)
+    # The text stays in memory for the task; it is never written to disk.
+    background_tasks.add_task(
+        agent.index_in_background, registration.document.id, registration.text
+    )
+    response.status_code = status.HTTP_202_ACCEPTED
+    return document_response(registration.document)
+
+
 @router.post(
     "/documents/text",
     response_model=DocumentResponse,
     status_code=status.HTTP_201_CREATED,
+    responses=INGEST_RESPONSES,
     tags=["documents"],
 )
 def ingest_text(
-    payload: TextDocumentRequest, request: Request, response: Response
+    payload: TextDocumentRequest,
+    request: Request,
+    response: Response,
+    background_tasks: BackgroundTasks,
+    background: bool = Query(default=False, description=BACKGROUND_DESCRIPTION),
 ) -> DocumentResponse:
-    result = container_from(request).ingestion_agent.run(
+    agent = container_from(request).ingestion_agent
+    if background:
+        registration = agent.register(
+            title=payload.title,
+            source=payload.source,
+            text=payload.text,
+            collection_id=payload.collection_id,
+        )
+        return queue_indexing(agent, background_tasks, response, registration)
+    result = agent.run(
         title=payload.title,
         source=payload.source,
         text=payload.text,
@@ -205,14 +252,17 @@ def ingest_text(
     "/documents/upload",
     response_model=DocumentResponse,
     status_code=status.HTTP_201_CREATED,
+    responses=INGEST_RESPONSES,
     tags=["documents"],
 )
 async def upload_document(
     request: Request,
     response: Response,
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     title: str | None = Form(default=None),
     collection_id: str | None = Form(default=None),
+    background: bool = Query(default=False, description=BACKGROUND_DESCRIPTION),
 ) -> DocumentResponse:
     container = container_from(request)
     content = await file.read(container.settings.max_upload_bytes + 1)
@@ -223,10 +273,21 @@ async def upload_document(
             status_code=413,
         )
     filename = file.filename or "uploaded-document"
-    # Parsing and embedding block, so keep them off the event loop.
+    # Parsing and embedding block, so keep them off the event loop. Parsing always happens
+    # here, so an unsupported or broken file gets its 415 straight away.
     text = await run_in_threadpool(container.file_parser.parse, filename, content)
+    agent = container.ingestion_agent
+    if background:
+        registration = await run_in_threadpool(
+            agent.register,
+            title=(title or filename),
+            source=f"upload:{filename}",
+            text=text,
+            collection_id=collection_id,
+        )
+        return queue_indexing(agent, background_tasks, response, registration)
     result = await run_in_threadpool(
-        container.ingestion_agent.run,
+        agent.run,
         title=(title or filename),
         source=f"upload:{filename}",
         text=text,

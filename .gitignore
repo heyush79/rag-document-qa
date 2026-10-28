@@ -6,8 +6,7 @@ __pycache__/
 htmlcov/
 *.egg-info/
 .env
-data/*.db
-data/*.db-*
-data/chroma/
+# Runtime data: SQLite, Chroma and anything dropped there during a demo.
+data/
 .DS_Store
 build/
