@@ -35,6 +35,7 @@ the comparison table in the second note.
 | 5 | Collections, then conversations with query rewriting | 12, 2 | M + M |
 | 6 | Hosted database and vector store: not needed, moved to the backlog | 9 | none |
 | 7 | Background ingestion, more file types, guardrails | 11, 15, 16 | M |
+| 8 | Web UI, added by the owner on 2026-10-28 | none | S |
 | none | Backlog and deliberately skipped items | 13, 14, 18 to 23 | none |
 
 S is under a day, M is one to three days, L is more.
@@ -431,8 +432,8 @@ in case the app ever moves to a host that wipes its disk on restart.
 
 ### 7a: Background ingestion
 
-Status: done on branch `phase-7ab-ingestion`, waiting for review. 169 tests pass (with 7b), and
-ruff reports nothing.
+Status: done and committed (`e551397`), together with 7b. 169 tests pass, and ruff reports
+nothing.
 
 - [x] `DocumentService.ingest_text` is now `register()`, which hashes the text, checks for a
       duplicate and creates the `processing` row, followed by `index(document_id, text)`, which
@@ -449,7 +450,7 @@ ruff reports nothing.
 
 ### 7b: More file types
 
-Status: done with 7a.
+Status: done and committed with 7a (`e551397`).
 
 - [x] DOCX through `python-docx` (paragraphs in order, then tables one row per line). HTML
       through the standard library's `html.parser`, dropping `script`, `style` and `noscript`,
@@ -498,6 +499,47 @@ Tests:
 - Each new file type.
 
 ---
+
+## Phase 8: Web UI
+
+Status: done on branch `phase-8-ui`, waiting for review. 174 tests pass, and ruff reports
+nothing.
+
+Added by the owner on 2026-10-28, to try the app without curl. The comparison's frontend rows
+were skipped because the target is a small backend-only deployment; this stays within that:
+one static page served by the API itself, with no build step and nothing extra to deploy.
+
+- [x] `app/static/index.html`, `styles.css` and `app.js`: plain HTML, CSS and JavaScript, no
+      framework. Mounted at `/ui/` by `app/api/ui.py` with `StaticFiles(html=True)`; the root
+      JSON now points at it. setuptools package data includes the files, so the Docker image's
+      non-editable install carries them (checked in a throwaway venv).
+- [x] A three-column app shell: chats and collections on the left, the thread in the middle,
+      the document library on the right. The library collapses to a drawer below 1180 px and
+      the sidebar below 820 px. Light and dark themes follow the system unless chosen; inline
+      SVG icons; toasts; an empty state with suggested questions.
+- [x] Chats: every question belongs to a chat, created on the first question and titled by the
+      server after it; switching reloads the transcript; a chat bound to a collection locks the
+      scope, and choosing another collection starts a new chat. Delete with confirmation.
+- [x] Collections: list with document counts, create inline, delete (cascading when non-empty,
+      after a confirmation), and pick one as the scope for questions and the document list.
+- [x] Library: drag-and-drop or click-to-choose upload (several files at once), paste text, the
+      background option on by default, a pulsing status dot while a document is `processing`
+      with polling every 1.5 s, delete, and usage totals at the bottom.
+- [x] Answers: streamed by default (SSE parsed from `fetch`), or the plain route; a small
+      Markdown renderer (paragraphs, lists, emphasis, code, headings) on top of HTML escaping;
+      `[Sn]` citations become numbered pills that open the matching source card, which shows the
+      relevance score as a bar, the chunk and its text; the footer shows the latency and the
+      rewritten `search_query` when it differs from the question.
+- [x] Settings dialog: API key (kept in `localStorage`, sent as a bearer token), theme, and a
+      deep health check whose result is shown in full. The health dot in the sidebar runs it
+      too. The page itself needs no key.
+
+Reviewed by the owner in the browser on 2026-10-28 against the sample documents; the screenshot
+is `docs/images/ui.png` and heads the README's Web UI section.
+
+Tests added: the page and its assets are served, a missing asset is a 404, `/ui` redirects to
+`/ui/`, the root JSON points at the UI, and the page loads without a key while the API still
+needs one.
 
 ## Backlog (not scheduled)
 

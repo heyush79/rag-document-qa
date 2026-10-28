@@ -42,11 +42,19 @@ Schema changes are versioned migrations in `app/db/migrations.py`. On startup th
 
 ```mermaid
 flowchart TB
+    subgraph Clients
+        UI[Web UI at /ui/]
+        Curl[Swagger / curl / scripts]
+    end
+
     subgraph API_Layer[API Layer]
         FastAPI[FastAPI Routes]
         Schemas[Pydantic Schemas]
         Middleware[Request ID and Timing Middleware]
     end
+
+    UI --> FastAPI
+    Curl --> FastAPI
 
     subgraph Agent_Layer[Agent / Orchestration Layer]
         IngestionAgent[Ingestion Agent]
@@ -318,6 +326,10 @@ The score is convenient for clients, but it is not a calibrated probability. In 
 - A minimum relevance threshold applies to every answer provider. When nothing passes it, the LLM is told the search found nothing rather than receiving an empty context.
 - Source chunks are returned in the API response for verification.
 - Query-to-source rows are persisted for audit and evaluation.
+
+## 10a. Web UI
+
+`app/static/` holds one page of plain HTML, CSS and JavaScript, mounted at `/ui/` by `app/api/ui.py` with Starlette's `StaticFiles`. It is a client of the public API only: it calls the same endpoints as any other client, reads `/query/stream` with `fetch` and a `ReadableStream` parser for the SSE events, polls `GET /documents` while a document is `processing`, and sends the API key the user types as a bearer token. Keeping it static and dependency-free means no build step, no Node toolchain, and nothing extra in the Docker image beyond the three files, which setuptools includes as package data.
 
 ## 11. Authentication
 

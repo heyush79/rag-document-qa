@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>RAG Document Q&amp;A</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app" id="app">
+
+    <!-- Left: conversations, collections, settings -->
+    <aside class="sidebar" id="sidebar" aria-label="Conversations and collections">
+      <div class="sidebar-head">
+        <div class="brand">
+          <span class="logo" aria-hidden="true">Q</span>
+          <span class="brand-name">Document Q&amp;A</span>
+        </div>
+        <button class="icon-btn" id="close-sidebar" type="button" aria-label="Close menu" data-icon="x"></button>
+      </div>
+
+      <button class="btn primary block" id="new-chat" type="button">
+        <span data-icon="plus"></span> New chat
+      </button>
+
+      <section class="side-section">
+        <h2>Chats</h2>
+        <ul class="side-list" id="conversation-list"></ul>
+      </section>
+
+      <section class="side-section">
+        <div class="side-section-head">
+          <h2>Collections</h2>
+          <button class="icon-btn" id="add-collection" type="button" aria-label="New collection" data-icon="plus"></button>
+        </div>
+        <form class="inline-form hidden" id="collection-form">
+          <input id="collection-name" placeholder="Collection name" maxlength="100" required>
+          <button class="btn small" type="submit">Add</button>
+        </form>
+        <ul class="side-list" id="collection-list"></ul>
+      </section>
+
+      <div class="sidebar-foot">
+        <button class="health" id="health" type="button" title="Click to run a deep check of the embedder and LLM providers">
+          <span class="dot" id="health-dot"></span>
+          <span id="health-text">Checking…</span>
+        </button>
+        <button class="icon-btn" id="open-settings" type="button" aria-label="Settings" data-icon="settings"></button>
+      </div>
+    </aside>
+
+    <!-- Centre: the chat -->
+    <main class="main">
+      <header class="main-head">
+        <button class="icon-btn show-mobile" id="open-sidebar" type="button" aria-label="Open menu" data-icon="menu"></button>
+        <div class="main-title">
+          <h1 id="thread-title">New chat</h1>
+          <p class="subtitle" id="thread-subtitle">Ask across all collections</p>
+        </div>
+        <div class="main-actions">
+          <button class="icon-btn" id="toggle-theme" type="button" aria-label="Toggle theme" data-icon="sun"></button>
+          <button class="btn ghost" id="toggle-library" type="button" aria-expanded="true">
+            <span data-icon="folder"></span> Library
+          </button>
+        </div>
+      </header>
+
+      <div class="thread" id="thread" aria-live="polite"></div>
+
+      <form class="composer" id="composer">
+        <div class="composer-box">
+          <textarea id="question" rows="1" placeholder="Ask a question about your documents…" required></textarea>
+          <button class="send" id="send" type="submit" aria-label="Send" data-icon="send"></button>
+        </div>
+        <div class="composer-meta">
+          <label class="meta-field">
+            <span data-icon="layers"></span>
+            <select id="scope" aria-label="Collection to search"></select>
+          </label>
+          <label class="meta-field">
+            <span>Top k</span>
+            <input id="top-k" type="number" min="1" max="20" value="4" aria-label="Chunks to retrieve">
+          </label>
+          <label class="switch">
+            <input id="stream" type="checkbox" checked>
+            <span class="track"></span>
+            <span>Stream</span>
+          </label>
+          <span class="meta-hint" id="composer-hint">Enter to send · Shift+Enter for a new line</span>
+        </div>
+      </form>
+    </main>
+
+    <!-- Right: documents -->
+    <aside class="library" id="library" aria-label="Documents">
+      <div class="library-head">
+        <h2>Library <span class="muted" id="library-scope"></span></h2>
+        <div>
+          <button class="icon-btn" id="refresh-library" type="button" aria-label="Refresh" data-icon="refresh"></button>
+          <button class="icon-btn" id="close-library" type="button" aria-label="Close library" data-icon="x"></button>
+        </div>
+      </div>
+
+      <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="Upload a document">
+        <span data-icon="upload"></span>
+        <strong>Drop a file here or click to choose</strong>
+        <span class="muted">TXT, MD, PDF, DOCX, HTML, CSV · up to the configured size</span>
+        <input id="file-input" type="file" accept=".txt,.md,.pdf,.docx,.html,.htm,.csv" hidden>
+      </div>
+      <div class="upload-options">
+        <input id="upload-title" placeholder="Title (optional, defaults to the file name)" maxlength="200">
+        <label class="switch">
+          <input id="background" type="checkbox" checked>
+          <span class="track"></span>
+          <span>Index in the background</span>
+        </label>
+      </div>
+
+      <details class="paste">
+        <summary>Paste text instead</summary>
+        <form id="text-form" class="stack">
+          <input id="text-title" placeholder="Title" maxlength="200" required>
+          <textarea id="text-body" rows="5" placeholder="Document text" required></textarea>
+          <button class="btn small" type="submit">Ingest text</button>
+        </form>
+      </details>
+
+      <ul class="doc-list" id="document-list"></ul>
+
+      <footer class="library-foot" id="stats"></footer>
+    </aside>
+
+    <div class="scrim" id="scrim" hidden></div>
+  </div>
+
+  <!-- Settings dialog -->
+  <dialog id="settings" class="dialog">
+    <form method="dialog" class="dialog-body">
+      <div class="dialog-head">
+        <h2>Settings</h2>
+        <button class="icon-btn" type="submit" aria-label="Close" data-icon="x"></button>
+      </div>
+      <label class="field">
+        <span>API key</span>
+        <input id="api-key" type="password" placeholder="Only needed when RAG_AUTH_ENABLED=true" autocomplete="off">
+        <small class="muted">Sent as a bearer token with every request and remembered in this browser.</small>
+      </label>
+      <label class="field">
+        <span>Theme</span>
+        <select id="theme">
+          <option value="system">Follow the system</option>
+          <option value="light">Light</option>
+          <option value="dark">Dark</option>
+        </select>
+      </label>
+      <div class="field">
+        <span>Health</span>
+        <button class="btn small" type="button" id="deep-health">Run deep check</button>
+        <pre class="muted small" id="health-detail"></pre>
+      </div>
+      <p class="muted small">API docs: <a href="/docs" target="_blank" rel="noopener">/docs</a></p>
+    </form>
+  </dialog>
+
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

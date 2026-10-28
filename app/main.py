@@ -11,6 +11,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from app.api.routes import admin_router, public_router, router
+from app.api.ui import mount_ui
 from app.config import Settings, get_settings
 from app.container import ApplicationContainer, build_container
 from app.core.exceptions import AppError
@@ -104,11 +105,13 @@ def create_app(
         return {
             "name": resolved_settings.app_name,
             "docs": "/docs",
+            "ui": "/ui/",
             "health": f"{resolved_settings.api_prefix}/health",
         }
 
     application.include_router(public_router, prefix=resolved_settings.api_prefix)
     application.include_router(router, prefix=resolved_settings.api_prefix)
     application.include_router(admin_router, prefix=resolved_settings.api_prefix)
+    mount_ui(application)
     return application
 

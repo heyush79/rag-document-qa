@@ -6,7 +6,7 @@ The project ingests TXT, Markdown, text-based PDF, DOCX, HTML and CSV files, spl
 
 ## What is included
 
-- FastAPI REST API with Swagger documentation
+- FastAPI REST API with Swagger documentation, and a web UI served at `/ui/` with no build step
 - Text, Markdown, PDF, DOCX, HTML and CSV ingestion, synchronous or in the background
 - Collections that group documents, with per-collection duplicate detection and scoped search
 - Conversations: follow-up questions are rewritten into standalone search queries and answered with the earlier turns as context
@@ -22,7 +22,7 @@ The project ingests TXT, Markdown, text-based PDF, DOCX, HTML and CSV files, spl
 - API-key authentication, off by default, with admin-managed keys stored as hashes
 - Request IDs, processing-time headers, health checks with an optional deep provider check, and structured errors
 - Dependency injection for deterministic tests
-- **169 passing Pytest tests**, run by GitHub Actions on every pull request
+- **174 passing Pytest tests**, run by GitHub Actions on every pull request
 - Architecture documentation
 
 ## Architecture at a glance
@@ -128,8 +128,23 @@ uvicorn app.main:create_app --factory --reload
 
 Open:
 
+- Web UI: `http://127.0.0.1:8000/ui/`
 - Swagger UI: `http://127.0.0.1:8000/docs`
 - Health endpoint: `http://127.0.0.1:8000/api/v1/health`
+
+## Web UI
+
+![The web UI: chats and collections on the left, the thread in the middle, the document library on the right](docs/images/ui.png)
+
+`/ui/` is a chat-style app that drives the whole API, so you can try everything without curl:
+
+- **Chats** in the left sidebar. A new chat is created on its first question and titled after it; follow-up questions use the earlier turns, and the answer's footer shows what a follow-up was rewritten to for retrieval.
+- **Collections** below the chats: create one, pick it as the scope for questions and for the document list, delete it (cascading, after a confirmation). A chat bound to a collection keeps that scope.
+- **Answers** render Markdown, stream in by default, and carry clickable `[1]`-style citations that open the matching source card, with its relevance score, chunk and text, under the answer.
+- **Library** on the right: drag and drop a file (TXT, MD, PDF, DOCX, HTML, CSV) or paste text, with the background option on by default and a live status while documents index; usage totals at the bottom.
+- **Settings** (gear icon): the API key for when authentication is on, remembered in the browser; light, dark or system theme; a deep health check.
+
+It is plain HTML, CSS and JavaScript in `app/static/`, served by FastAPI itself, so there is no build step, no Node toolchain and nothing extra to deploy. It ships inside the Docker image.
 
 ## Run the complete flow
 
@@ -375,7 +390,7 @@ python -m pytest -q
 Expected result:
 
 ```text
-169 passed
+174 passed
 ```
 
 Coverage report:
@@ -410,10 +425,11 @@ rag-document-qa/
 ├── .github/workflows/ci.yml    # Lint and tests on GitHub Actions
 ├── app/
 │   ├── agents/                 # Ingestion, retrieval, answer, orchestration
-│   ├── api/                    # REST endpoints and API-key checks
+│   ├── api/                    # REST endpoints, API-key checks, the UI mount
 │   ├── core/                   # Exceptions, logging, key generation and hashing
 │   ├── db/                     # SQLite migrations and repositories
 │   ├── services/               # Chunking, embedding, vector store, parsing, LLM, collections, conversations
+│   ├── static/                 # The web UI: one page of plain HTML, CSS and JavaScript
 │   ├── config.py               # Environment-based settings
 │   ├── container.py            # Dependency wiring
 │   ├── main.py                 # FastAPI application factory
@@ -424,7 +440,7 @@ rag-document-qa/
 │   └── IMPLEMENTATION_PLAN.md  # Roadmap for DocsGPT-inspired features
 ├── sample_data/
 ├── scripts/
-├── tests/                      # 169 tests
+├── tests/                      # 174 tests
 ├── .env.example
 ├── Dockerfile
 ├── docker-compose.yml

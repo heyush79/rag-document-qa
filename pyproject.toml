@@ -33,6 +33,10 @@ dev = [
 [tool.setuptools.packages.find]
 include = ["app*"]
 
+[tool.setuptools.package-data]
+# The web UI, served by the app, so a non-editable install (the Docker image) carries it.
+app = ["static/*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
