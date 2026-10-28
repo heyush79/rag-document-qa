@@ -34,6 +34,8 @@ def test_initialize_applies_all_migrations(tmp_path) -> None:
         "llm_calls",
         "api_keys",
         "collections",
+        "conversations",
+        "messages",
     }
     assert expected <= table_names(db)
 

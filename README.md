@@ -9,6 +9,7 @@ The project ingests TXT, Markdown, and text-based PDF files, splits them into ov
 - FastAPI REST API with Swagger documentation
 - Text, Markdown, and PDF ingestion
 - Collections that group documents, with per-collection duplicate detection and scoped search
+- Conversations: follow-up questions are rewritten into standalone search queries and answered with the earlier turns as context
 - SHA-256 content deduplication
 - Word-window chunking with configurable overlap
 - Sentence Transformers embeddings locally, or any OpenAI-compatible embedding API
@@ -21,7 +22,7 @@ The project ingests TXT, Markdown, and text-based PDF files, splits them into ov
 - API-key authentication, off by default, with admin-managed keys stored as hashes
 - Request IDs, processing-time headers, health checks with an optional deep provider check, and structured errors
 - Dependency injection for deterministic tests
-- **132 passing Pytest tests**, run by GitHub Actions on every pull request
+- **148 passing Pytest tests**, run by GitHub Actions on every pull request
 - Architecture documentation
 
 ## Architecture at a glance
@@ -221,8 +222,12 @@ The event format is in [docs/API.md](docs/API.md#stream-an-answer).
 | GET | `/api/v1/documents` | List documents, optionally by collection |
 | GET | `/api/v1/documents/{id}` | Get document metadata |
 | DELETE | `/api/v1/documents/{id}` | Delete metadata and vectors |
-| POST | `/api/v1/query` | Retrieve chunks and answer, across everything or one collection |
+| POST | `/api/v1/query` | Retrieve chunks and answer, across everything or one collection, optionally within a conversation |
 | POST | `/api/v1/query/stream` | Same, with the answer streamed as Server-Sent Events |
+| POST | `/api/v1/conversations` | Start a conversation, optionally bound to a collection |
+| GET | `/api/v1/conversations` | List conversations |
+| GET | `/api/v1/conversations/{id}` | Get a conversation with its messages |
+| DELETE | `/api/v1/conversations/{id}` | Delete a conversation and its messages |
 | GET | `/api/v1/queries` | Recent query history |
 | GET | `/api/v1/stats` | Document, vector and query counts, plus LLM call and token totals |
 | POST | `/api/v1/api-keys` | Create an API key (admin key required) |
@@ -251,6 +256,27 @@ curl -X POST http://127.0.0.1:8000/api/v1/query \
 ```
 
 Duplicate detection is per collection: the same text can be ingested into two collections, but not twice into one. Deleting a collection that still has documents is refused unless you pass `?cascade=true`, which deletes its documents and vectors too. The `default` collection can't be deleted.
+
+## Conversations
+
+A conversation lets a follow-up question lean on what was asked before. Create one, then pass its id with each question:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/conversations \
+  -H "Content-Type: application/json" \
+  -d '{"collection_id": "COLLECTION_ID"}'
+# {"id": "...", "title": null, ...}   collection_id is optional
+
+curl -X POST http://127.0.0.1:8000/api/v1/query \
+  -H "Content-Type: application/json" \
+  -d '{"question": "And what about remote work?", "conversation_id": "CONVERSATION_ID"}'
+```
+
+With an LLM provider configured, a question that follows earlier turns is first rewritten into a standalone search query ("And what about remote work?" becomes something like "remote work policy days per week"), and that is what retrieval uses. The response's `search_query` shows it. The model then answers the original question with the earlier turns in front of it. If the rewrite fails or comes back empty, the question itself is searched. The extractive provider never rewrites.
+
+Both the question and the answer are saved to the conversation, from `/query` and `/query/stream` alike. An untitled conversation takes its first question as its title. A conversation bound to a collection searches only that collection. Deleting a collection also deletes its conversations.
+
+`RAG_HISTORY_MAX_TURNS` (default 6) caps how many recent turns are sent with a follow-up, and `RAG_HISTORY_TOKEN_LIMIT` (default 1000) caps their estimated size; older turns are dropped first.
 
 ## Use an OpenAI-compatible model
 
@@ -345,7 +371,7 @@ python -m pytest -q
 Expected result:
 
 ```text
-132 passed
+148 passed
 ```
 
 Coverage report:
@@ -383,7 +409,7 @@ rag-document-qa/
 │   ├── api/                    # REST endpoints and API-key checks
 │   ├── core/                   # Exceptions, logging, key generation and hashing
 │   ├── db/                     # SQLite migrations and repositories
-│   ├── services/               # Chunking, embedding, vector store, parsing, LLM, collections
+│   ├── services/               # Chunking, embedding, vector store, parsing, LLM, collections, conversations
 │   ├── config.py               # Environment-based settings
 │   ├── container.py            # Dependency wiring
 │   ├── main.py                 # FastAPI application factory
@@ -394,7 +420,7 @@ rag-document-qa/
 │   └── IMPLEMENTATION_PLAN.md  # Roadmap for DocsGPT-inspired features
 ├── sample_data/
 ├── scripts/
-├── tests/                      # 132 tests
+├── tests/                      # 148 tests
 ├── .env.example
 ├── Dockerfile
 ├── docker-compose.yml

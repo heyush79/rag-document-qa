@@ -25,6 +25,7 @@ Its responsibility is semantic similarity search. Given a question embedding, it
 SQLite stores:
 
 - Collections, and the collection each document belongs to
+- Conversations and their messages
 - Document lifecycle metadata
 - SHA-256 content hashes, unique per collection
 - Ingestion status
@@ -175,6 +176,14 @@ Collections live only in SQLite; chunk metadata in ChromaDB carries no collectio
 
 Adding collections changed the uniqueness rule on `documents` (`UNIQUE(collection_id, content_hash)`). SQLite can't alter constraints in place, so migration 4 rebuilds the table, moving every existing document into the `default` collection.
 
+### Conversations and query rewriting
+
+A query with a `conversation_id` loads the conversation's recent turns: at most `history_max_turns`, and only as many of the latest as fit in `history_token_limit` estimated tokens. If there are any, and an LLM provider is configured, `QueryRewriter` asks the model to rephrase the question as a standalone search query, with temperature 0 and a small `max_tokens`, logged in `llm_calls` with purpose `rewrite`. Retrieval runs on that query. The answer prompt is the system prompt, the earlier turns as user and assistant messages, then the documents and the original question: the rewrite exists only to find the right chunks. If the rewrite fails or comes back empty, the raw question is searched; a conversation never makes a query fail. The extractive provider skips the rewrite.
+
+After the answer, both the question and the answer are saved as messages, from `/query` and from `/query/stream` once the stream has completed. `queries.search_query` records what was actually searched.
+
+A conversation may be bound to a collection, which then scopes its queries; a request naming a different collection is a 400. Deleting a collection cascades to its conversations, and deleting a conversation to its messages.
+
 ### Streaming
 
 `POST /query/stream` runs the same retrieval and the same prompt, but sends the answer as Server-Sent Events while the model generates it.
@@ -323,7 +332,9 @@ Any valid key sees all data; per-tenant authorization is still to do.
 | Missing, unknown or revoked API key | HTTP 401 with `WWW-Authenticate: Bearer` |
 | Key management without an admin key configured | HTTP 403 |
 | Duplicate content in the same collection | Existing document returned with HTTP 200 |
-| Unknown collection | HTTP 404 |
+| Unknown collection or conversation | HTTP 404 |
+| Query names a collection other than the conversation's | HTTP 400 |
+| Query rewrite fails | The raw question is searched; the failed call is logged |
 | Deleting a non-empty collection without `cascade` | HTTP 409 |
 | Embedding/index failure | Document marked failed; partial vectors deleted |
 | LLM provider fails | Next fallback provider is tried; HTTP 502 once all have failed |

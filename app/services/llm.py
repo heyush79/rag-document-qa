@@ -98,12 +98,14 @@ class FallbackLLM:
         *,
         purpose: str = "answer",
         query_id: str | None = None,
+        temperature: float = 0.1,
+        max_tokens: int | None = None,
     ) -> Completion:
         last_error: UpstreamServiceError | None = None
         for provider in self.providers:
             started = time.perf_counter()
             try:
-                completion = self._complete(provider, messages)
+                completion = self._complete(provider, messages, temperature, max_tokens)
             except UpstreamServiceError as exc:
                 self._record(provider, purpose, query_id, started, error=exc)
                 last_error = exc
@@ -158,12 +160,25 @@ class FallbackLLM:
                 statuses.append(ProviderStatus(provider.base_url, provider.model, ok=True))
         return statuses
 
-    def _complete(self, provider: LLMProvider, messages: Sequence[Message]) -> Completion:
+    def _complete(
+        self,
+        provider: LLMProvider,
+        messages: Sequence[Message],
+        temperature: float,
+        max_tokens: int | None,
+    ) -> Completion:
+        payload: dict[str, Any] = {
+            "model": provider.model,
+            "messages": list(messages),
+            "temperature": temperature,
+        }
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
         try:
             response = self.client.post(
                 f"{provider.url}/chat/completions",
                 headers=provider.headers,
-                json={"model": provider.model, "messages": list(messages), "temperature": 0.1},
+                json=payload,
                 timeout=self.timeout_seconds,
             )
             response.raise_for_status()

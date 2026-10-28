@@ -13,6 +13,7 @@ from app.db.repositories import (
     ApiKeyRepository,
     AuditRepository,
     CollectionRepository,
+    ConversationRepository,
     DocumentRepository,
     LLMCallRepository,
     QueryRepository,
@@ -25,6 +26,7 @@ from app.services.answer_generation import (
 )
 from app.services.chunking import TextChunker
 from app.services.collection_service import CollectionService
+from app.services.conversation_service import ConversationService
 from app.services.document_service import DocumentService
 from app.services.embeddings import (
     Embedder,
@@ -34,6 +36,7 @@ from app.services.embeddings import (
 )
 from app.services.file_parser import FileParser
 from app.services.llm import FallbackLLM, LLMProvider
+from app.services.query_rewriter import QueryRewriter
 from app.services.vector_store import ChromaVectorStore, VectorStore
 
 
@@ -47,6 +50,7 @@ class ApplicationContainer:
     llm_calls: LLMCallRepository
     api_keys: ApiKeyRepository
     collections: CollectionService
+    conversations: ConversationService
     embedder: Embedder
     vector_store: VectorStore
     # None when the extractive answer provider is configured.
@@ -128,6 +132,13 @@ def build_container(
         document_service=document_service,
         audit=audit,
     )
+    conversation_service = ConversationService(
+        conversations=ConversationRepository(db),
+        collections=collection_repository,
+        audit=audit,
+        history_max_turns=settings.history_max_turns,
+        history_token_limit=settings.history_token_limit,
+    )
 
     llm = None
     if settings.answer_provider == "openai-compatible":
@@ -158,6 +169,7 @@ def build_container(
         llm_calls=llm_calls,
         api_keys=api_keys,
         collections=collection_service,
+        conversations=conversation_service,
         embedder=embedder,
         vector_store=vector_store,
         llm=llm,
@@ -168,5 +180,8 @@ def build_container(
             answer_agent=answer_agent,
             query_repository=queries,
             collection_service=collection_service,
+            conversation_service=conversation_service,
+            # The extractive provider has no LLM, so follow-ups search with the raw question.
+            query_rewriter=QueryRewriter(llm),
         ),
     )

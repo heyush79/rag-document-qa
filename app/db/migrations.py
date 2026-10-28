@@ -135,6 +135,34 @@ CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(status);
 CREATE INDEX IF NOT EXISTS idx_documents_collection ON documents(collection_id, created_at DESC);
 """
 
+# Conversations keep the turns that give a follow-up question its context. A conversation may
+# belong to a collection; deleting the collection or the conversation removes its messages.
+# queries.search_query records what was actually searched when a question was rewritten.
+CONVERSATIONS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS conversations (
+    id TEXT PRIMARY KEY,
+    collection_id TEXT REFERENCES collections(id) ON DELETE CASCADE,
+    title TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_conversations_updated_at ON conversations(updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
+    content TEXT NOT NULL,
+    query_id TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id, id);
+
+ALTER TABLE queries ADD COLUMN search_query TEXT;
+"""
+
 # Append new migrations with the next version number. Never edit one that has shipped:
 # databases that already recorded it will not run it again.
 MIGRATIONS: tuple[Migration, ...] = (
@@ -143,6 +171,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(2, "llm_calls", LLM_CALLS_SCHEMA),
     Migration(3, "api_keys", API_KEYS_SCHEMA),
     Migration(4, "collections", COLLECTIONS_SCHEMA),
+    Migration(5, "conversations", CONVERSATIONS_SCHEMA),
 )
 
 MIGRATIONS_TABLE = """

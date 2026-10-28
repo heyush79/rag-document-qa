@@ -333,8 +333,7 @@ startup warning; the OpenAPI spec declares the bearer scheme on protected routes
 
 ### 5a: Collections
 
-Status: done on branch `phase-5a-collections`, waiting for review. 132 tests pass, and ruff
-reports nothing. 5b follows on its own branch.
+Status: done and committed (`f5d292f`). 132 tests pass, and ruff reports nothing.
 
 - [x] Migration 4 adds `collections(id, name UNIQUE, description, created_at)` with a `default`
       collection (its id is the fixed string `default`, so clients can name it without looking it
@@ -372,38 +371,54 @@ and without cascade, and the undeletable default.
 
 ### 5b: Conversations
 
-- [ ] A migration adds `conversations(id, collection_id, title, created_at, updated_at)` and
-      `messages(id, conversation_id, role, content, query_id, created_at)`. Deleting a conversation
-      deletes its messages.
-- [ ] Endpoints: `POST /conversations`, `GET /conversations`, `GET /conversations/{id}` (with its
-      messages), and `DELETE /conversations/{id}`. Both query routes accept an optional
-      `conversation_id`, and return it along with the `search_query` actually used for retrieval.
-- [ ] When the conversation has history, load the last `history_max_turns` turns (default 6) that
-      fit in `history_token_limit` (default 1000). Then rewrite the question for retrieval with:
+Status: done on branch `phase-5b-conversations`, waiting for review. 148 tests pass, and ruff
+reports nothing.
 
-  ```text
-  Given the following conversation history:
-  {history}
+- [x] Migration 5 adds `conversations(id, collection_id, title, created_at, updated_at)` and
+      `messages(id, conversation_id, role, content, query_id, created_at)`. Deleting a
+      conversation deletes its messages, and deleting a collection deletes its conversations
+      (both `ON DELETE CASCADE`). It also adds `queries.search_query`, so the query history shows
+      what was actually searched.
+- [x] Endpoints: `POST /conversations` (optional `collection_id` and `title`),
+      `GET /conversations` (with message counts), `GET /conversations/{id}` (with its messages),
+      and `DELETE /conversations/{id}`. Both query routes accept an optional `conversation_id`,
+      and return it along with the `search_query` actually used for retrieval: in the JSON body
+      for `/query`, on the `source` event for `/query/stream`. An untitled conversation takes its
+      first question (cut to 80 characters) as its title.
+- [x] When the conversation has history, the last `history_max_turns` turns (default 6) that fit
+      in `history_token_limit` (default 1000) are loaded, newest first until the limit. Then
+      `QueryRewriter` rewrites the question for retrieval with the planned prompt, preceded by a
+      one-line system message asking for the query only, at temperature 0 with `max_tokens` 120.
+      On any error or empty reply, the raw question is searched. The call is logged in `llm_calls`
+      with purpose `rewrite`. The extractive provider skips the rewrite, since it has no LLM.
+- [x] The answer prompt puts the history turns before the final user message. That final message
+      is the original question, not the rewritten one. The user and assistant messages are saved
+      after both `/query` and `/query/stream`, and only once the answer is complete.
+- [x] A conversation bound to a collection scopes its queries to it; a request naming a
+      different collection is a 400.
 
-  Rephrase the following user question to be a standalone search query
-  that captures all relevant context from the conversation:
-  {question}
-  ```
+Checked on 2026-10-28 against `gemini-2.5-flash` with MiniLM embeddings and the sample files,
+three turns in one conversation:
 
-  Use temperature 0 and a small `max_tokens`. On any error or empty reply, search with the raw
-  question. Log the call in `llm_calls` with purpose `rewrite`. The extractive provider skips the
-  rewrite.
-- [ ] The answer prompt puts the history turns before the final user message. That final message
-      is the original question, not the rewritten one. Save the user and assistant messages after
-      both `/query` and `/query/stream`.
+- "How many paid leave days do full-time employees get?" made one LLM call (no history yet) and
+  was answered with 24 days.
+- "And what about remote work?" was rewritten to "Remote work" (a `rewrite` row: 100 prompt
+  tokens, 2 completion tokens), which retrieved the handbook at 0.36 and was answered with the
+  three-days-per-week policy. On its own, that question would not have found the chunk.
+- "Who do I report a credential leak to, and how fast?" was rewritten to "Credential leak
+  reporting process and timeframe" and answered with the one-hour rule.
+- Each follow-up took about 4.5 s: two model calls instead of one. The conversation took the
+  first question as its title and held six messages; `/stats` counted five LLM calls.
 
-Tests:
-
-- The rewrite runs only when there is history.
-- The raw question is used when the rewrite fails.
-- The history appears in the answer prompt.
-- Messages are saved from both query routes.
-- Collection filtering works, and duplicates are detected per collection.
+Tests added: history keeps only the latest turns, drops older turns over the token limit, and is
+off with zero turns; the first question becomes the title; create, list, get, delete and the 404s;
+a conversation needs an existing collection and dies with it; `/query` and `/query/stream` save
+both messages and return `conversation_id` and `search_query`; the extractive provider never
+rewrites; a conversation scopes queries to its collection and rejects another; with the mock LLM,
+a follow-up is rewritten at temperature 0 with the history in the rewrite prompt, retrieval uses
+the rewrite while the answer prompt carries the earlier turns and the original question, and
+`llm_calls` holds a `rewrite` row then an `answer` row; a failed or empty rewrite falls back to
+the question; a streamed follow-up rewrites, then streams.
 
 ## Phase 6: Hosted database and vector store (row 9), not needed
 

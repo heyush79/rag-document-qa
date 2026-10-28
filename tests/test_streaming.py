@@ -106,10 +106,10 @@ def test_failure_partway_sends_error_event_and_saves_nothing(llm_client, mock_ll
 
 def test_unexpected_failure_sends_internal_error_event(settings, vector_store) -> None:
     class BrokenGenerator:
-        def generate(self, question, hits, *, query_id=None):
+        def generate(self, question, hits, **kwargs):
             raise NotImplementedError
 
-        def stream(self, question, hits, *, query_id=None):
+        def stream(self, question, hits, **kwargs):
             yield "partial"
             raise RuntimeError("bug")
 

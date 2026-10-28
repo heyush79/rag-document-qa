@@ -37,6 +37,8 @@ class QueryRecord:
     top_k: int
     latency_ms: float
     created_at: str
+    # What was searched: the question itself, or its rewrite from the conversation.
+    search_query: str | None = None
 
 
 class DocumentRepository:
@@ -232,15 +234,18 @@ class QueryRepository:
         top_k: int,
         latency_ms: float,
         sources: list[dict[str, Any]],
+        search_query: str | None = None,
     ) -> QueryRecord:
         created_at = utc_now_iso()
         with self.db.connect() as connection:
             connection.execute(
                 """
-                INSERT INTO queries(id, question, answer, top_k, latency_ms, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO queries(
+                    id, question, answer, top_k, latency_ms, created_at, search_query
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (query_id, question, answer, top_k, latency_ms, created_at),
+                (query_id, question, answer, top_k, latency_ms, created_at, search_query),
             )
             connection.executemany(
                 """
@@ -265,6 +270,7 @@ class QueryRepository:
             top_k=top_k,
             latency_ms=latency_ms,
             created_at=created_at,
+            search_query=search_query,
         )
 
     def list_recent(self, limit: int = 20) -> list[QueryRecord]:
@@ -278,6 +284,132 @@ class QueryRepository:
         with self.db.connect() as connection:
             row = connection.execute("SELECT COUNT(*) AS count FROM queries").fetchone()
         return int(row["count"])
+
+
+@dataclass(frozen=True)
+class ConversationRecord:
+    id: str
+    collection_id: str | None
+    title: str | None
+    created_at: str
+    updated_at: str
+
+
+@dataclass(frozen=True)
+class MessageRecord:
+    id: int
+    conversation_id: str
+    role: str
+    content: str
+    query_id: str | None
+    created_at: str
+
+
+class ConversationRepository:
+    def __init__(self, db: SQLiteDatabase) -> None:
+        self.db = db
+
+    def create(
+        self, *, conversation_id: str, collection_id: str | None, title: str | None
+    ) -> ConversationRecord:
+        now = utc_now_iso()
+        with self.db.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO conversations(id, collection_id, title, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (conversation_id, collection_id, title, now, now),
+            )
+        return ConversationRecord(
+            id=conversation_id,
+            collection_id=collection_id,
+            title=title,
+            created_at=now,
+            updated_at=now,
+        )
+
+    def get(self, conversation_id: str) -> ConversationRecord | None:
+        with self.db.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM conversations WHERE id = ?", (conversation_id,)
+            ).fetchone()
+        return ConversationRecord(**dict(row)) if row else None
+
+    def list(self, *, limit: int = 50, offset: int = 0) -> list[ConversationRecord]:
+        with self.db.connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM conversations ORDER BY updated_at DESC, id LIMIT ? OFFSET ?",
+                (limit, offset),
+            ).fetchall()
+        return [ConversationRecord(**dict(row)) for row in rows]
+
+    def message_counts(self) -> dict[str, int]:
+        with self.db.connect() as connection:
+            rows = connection.execute(
+                "SELECT conversation_id, COUNT(*) AS count FROM messages GROUP BY conversation_id"
+            ).fetchall()
+        return {row["conversation_id"]: int(row["count"]) for row in rows}
+
+    def set_title(self, conversation_id: str, title: str) -> None:
+        with self.db.connect() as connection:
+            connection.execute(
+                "UPDATE conversations SET title = ? WHERE id = ?", (title, conversation_id)
+            )
+
+    def delete(self, conversation_id: str) -> bool:
+        with self.db.connect() as connection:
+            cursor = connection.execute(
+                "DELETE FROM conversations WHERE id = ?", (conversation_id,)
+            )
+        return cursor.rowcount > 0
+
+    def count(self) -> int:
+        with self.db.connect() as connection:
+            row = connection.execute("SELECT COUNT(*) AS count FROM conversations").fetchone()
+        return int(row["count"])
+
+    def add_message(
+        self, *, conversation_id: str, role: str, content: str, query_id: str | None
+    ) -> MessageRecord:
+        now = utc_now_iso()
+        with self.db.connect() as connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO messages(conversation_id, role, content, query_id, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (conversation_id, role, content, query_id, now),
+            )
+            connection.execute(
+                "UPDATE conversations SET updated_at = ? WHERE id = ?", (now, conversation_id)
+            )
+            message_id = int(cursor.lastrowid)
+        return MessageRecord(
+            id=message_id,
+            conversation_id=conversation_id,
+            role=role,
+            content=content,
+            query_id=query_id,
+            created_at=now,
+        )
+
+    def messages(self, conversation_id: str) -> list[MessageRecord]:
+        with self.db.connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM messages WHERE conversation_id = ? ORDER BY id",
+                (conversation_id,),
+            ).fetchall()
+        return [MessageRecord(**dict(row)) for row in rows]
+
+    def last_messages(self, conversation_id: str, limit: int) -> list[MessageRecord]:
+        """The newest `limit` messages, in chronological order."""
+        with self.db.connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM messages WHERE conversation_id = ? ORDER BY id DESC LIMIT ?",
+                (conversation_id, limit),
+            ).fetchall()
+        return [MessageRecord(**dict(row)) for row in reversed(rows)]
 
 
 @dataclass(frozen=True)

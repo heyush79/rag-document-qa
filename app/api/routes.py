@@ -34,10 +34,15 @@ from app.schemas import (
     CollectionListResponse,
     CollectionResponse,
     ComponentHealth,
+    ConversationCreateRequest,
+    ConversationDetailResponse,
+    ConversationListResponse,
+    ConversationResponse,
     DocumentListResponse,
     DocumentResponse,
     HealthResponse,
     LLMUsageStats,
+    MessageResponse,
     ProviderHealth,
     QueryHistoryItem,
     QueryRequest,
@@ -102,6 +107,8 @@ def sse_events(stream: QueryStream) -> Iterator[str]:
         {
             "type": "source",
             "sources": [source.model_dump() for source in source_responses(stream.sources)],
+            "search_query": stream.search_query,
+            "conversation_id": stream.conversation_id,
         }
     )
     # The status line is already sent, so failures from here on become an error event.
@@ -271,6 +278,7 @@ def query_documents(payload: QueryRequest, request: Request) -> QueryResponse:
         top_k=top_k,
         document_id=payload.document_id,
         collection_id=payload.collection_id,
+        conversation_id=payload.conversation_id,
     )
     return QueryResponse(
         query_id=result.query_id,
@@ -278,6 +286,8 @@ def query_documents(payload: QueryRequest, request: Request) -> QueryResponse:
         answer=result.answer,
         latency_ms=result.latency_ms,
         sources=source_responses(result.sources),
+        search_query=result.search_query,
+        conversation_id=result.conversation_id,
     )
 
 
@@ -302,6 +312,7 @@ def stream_query(payload: QueryRequest, request: Request) -> StreamingResponse:
         top_k=top_k,
         document_id=payload.document_id,
         collection_id=payload.collection_id,
+        conversation_id=payload.conversation_id,
     )
     return StreamingResponse(
         sse_events(stream),
@@ -326,6 +337,7 @@ def stats(request: Request) -> StatsResponse:
     return StatsResponse(
         collection_count=container.collections.collections.count(),
         document_count=container.documents.count(),
+        conversation_count=container.conversations.conversations.count(),
         vector_count=container.vector_store.count(),
         query_count=container.queries.count(),
         llm_usage=LLMUsageStats(
@@ -382,6 +394,63 @@ def delete_collection(
     ),
 ) -> Response:
     container_from(request).collections.delete(collection_id, cascade=cascade)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+def conversation_response(summary) -> ConversationResponse:
+    return ConversationResponse(
+        **summary.conversation.__dict__, message_count=summary.message_count
+    )
+
+
+@router.post(
+    "/conversations",
+    response_model=ConversationResponse,
+    status_code=status.HTTP_201_CREATED,
+    tags=["conversations"],
+)
+def create_conversation(
+    payload: ConversationCreateRequest, request: Request
+) -> ConversationResponse:
+    summary = container_from(request).conversations.create(
+        collection_id=payload.collection_id, title=payload.title
+    )
+    return conversation_response(summary)
+
+
+@router.get("/conversations", response_model=ConversationListResponse, tags=["conversations"])
+def list_conversations(
+    request: Request,
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+) -> ConversationListResponse:
+    summaries = container_from(request).conversations.list(limit=limit, offset=offset)
+    return ConversationListResponse(
+        items=[conversation_response(s) for s in summaries], count=len(summaries)
+    )
+
+
+@router.get(
+    "/conversations/{conversation_id}",
+    response_model=ConversationDetailResponse,
+    tags=["conversations"],
+)
+def get_conversation(conversation_id: str, request: Request) -> ConversationDetailResponse:
+    record, messages = container_from(request).conversations.get_with_messages(conversation_id)
+    return ConversationDetailResponse(
+        **record.__dict__,
+        message_count=len(messages),
+        messages=[MessageResponse(**message.__dict__) for message in messages],
+    )
+
+
+@router.delete(
+    "/conversations/{conversation_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    tags=["conversations"],
+)
+def delete_conversation(conversation_id: str, request: Request) -> Response:
+    container_from(request).conversations.delete(conversation_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

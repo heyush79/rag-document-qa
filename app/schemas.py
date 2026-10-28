@@ -34,6 +34,9 @@ class QueryRequest(BaseModel):
     document_id: str | None = None
     # Searches only this collection's documents; omit to search everything.
     collection_id: str | None = None
+    # Continues a conversation: earlier turns give the question its context, and both the
+    # question and the answer are saved to it.
+    conversation_id: str | None = None
 
 
 class CollectionCreateRequest(BaseModel):
@@ -73,6 +76,9 @@ class QueryResponse(BaseModel):
     answer: str
     sources: list[SourceResponse]
     latency_ms: float
+    # What was searched: the question, or its rewrite from the conversation.
+    search_query: str
+    conversation_id: str | None = None
 
 
 class QueryHistoryItem(BaseModel):
@@ -82,6 +88,40 @@ class QueryHistoryItem(BaseModel):
     top_k: int
     latency_ms: float
     created_at: str
+    search_query: str | None = None
+
+
+class ConversationCreateRequest(BaseModel):
+    # Queries in the conversation search only this collection; omit to search everything.
+    collection_id: str | None = None
+    # Defaults to the first question asked.
+    title: str | None = Field(default=None, max_length=200)
+
+
+class ConversationResponse(BaseModel):
+    id: str
+    collection_id: str | None
+    title: str | None
+    created_at: str
+    updated_at: str
+    message_count: int
+
+
+class MessageResponse(BaseModel):
+    id: int
+    role: str
+    content: str
+    query_id: str | None
+    created_at: str
+
+
+class ConversationDetailResponse(ConversationResponse):
+    messages: list[MessageResponse]
+
+
+class ConversationListResponse(BaseModel):
+    items: list[ConversationResponse]
+    count: int
 
 
 class LLMUsageStats(BaseModel):
@@ -94,6 +134,7 @@ class LLMUsageStats(BaseModel):
 class StatsResponse(BaseModel):
     collection_count: int
     document_count: int
+    conversation_count: int
     vector_count: int
     query_count: int
     llm_usage: LLMUsageStats

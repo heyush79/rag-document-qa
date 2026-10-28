@@ -1,23 +1,34 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from typing import Protocol
 
 from app.services.llm import FallbackLLM
-from app.services.prompting import build_answer_messages
+from app.services.prompting import Turn, build_answer_messages
 from app.services.vector_store import SearchHit
 
 
 class AnswerGenerator(Protocol):
-    """`query_id` is the query being answered, so LLM calls can be logged against it."""
+    """`history` is the conversation so far; `query_id` is the query being answered, so LLM
+    calls can be logged against it."""
 
     def generate(
-        self, question: str, hits: list[SearchHit], *, query_id: str | None = None
+        self,
+        question: str,
+        hits: list[SearchHit],
+        *,
+        history: Sequence[Turn] = (),
+        query_id: str | None = None,
     ) -> str: ...
 
     def stream(
-        self, question: str, hits: list[SearchHit], *, query_id: str | None = None
+        self,
+        question: str,
+        hits: list[SearchHit],
+        *,
+        history: Sequence[Turn] = (),
+        query_id: str | None = None,
     ) -> Iterator[str]: ...
 
 
@@ -36,7 +47,12 @@ class ExtractiveAnswerGenerator:
         self.min_relevance_score = min_relevance_score
 
     def generate(
-        self, question: str, hits: list[SearchHit], *, query_id: str | None = None
+        self,
+        question: str,
+        hits: list[SearchHit],
+        *,
+        history: Sequence[Turn] = (),
+        query_id: str | None = None,
     ) -> str:
         useful_hits = [hit for hit in hits if hit.score >= self.min_relevance_score]
         if not useful_hits:
@@ -75,7 +91,12 @@ class ExtractiveAnswerGenerator:
         return " ".join(selected)
 
     def stream(
-        self, question: str, hits: list[SearchHit], *, query_id: str | None = None
+        self,
+        question: str,
+        hits: list[SearchHit],
+        *,
+        history: Sequence[Turn] = (),
+        query_id: str | None = None,
     ) -> Iterator[str]:
         yield self.generate(question, hits)
 
@@ -87,16 +108,26 @@ class OpenAICompatibleAnswerGenerator:
         self.llm = llm
 
     def generate(
-        self, question: str, hits: list[SearchHit], *, query_id: str | None = None
+        self,
+        question: str,
+        hits: list[SearchHit],
+        *,
+        history: Sequence[Turn] = (),
+        query_id: str | None = None,
     ) -> str:
         # Called even with no hits: the prompt then says nothing relevant was found.
-        messages = build_answer_messages(question, hits)
+        messages = build_answer_messages(question, hits, history)
         return self.llm.complete(messages, purpose="answer", query_id=query_id).text
 
     def stream(
-        self, question: str, hits: list[SearchHit], *, query_id: str | None = None
+        self,
+        question: str,
+        hits: list[SearchHit],
+        *,
+        history: Sequence[Turn] = (),
+        query_id: str | None = None,
     ) -> Iterator[str]:
-        messages = build_answer_messages(question, hits)
+        messages = build_answer_messages(question, hits, history)
         for item in self.llm.stream(messages, purpose="answer", query_id=query_id):
             if isinstance(item, str):
                 yield item

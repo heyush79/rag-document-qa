@@ -78,6 +78,19 @@ class Settings(BaseSettings):
         description="JSON list of providers tried in order when the primary one fails, each "
         '{"base_url": ..., "model": ..., "api_key": ...}.',
     )
+    history_max_turns: int = Field(
+        default=6,
+        ge=0,
+        le=50,
+        description="Most recent turns (a question and its answer) of a conversation sent to the "
+        "model with a follow-up question. 0 disables conversation context.",
+    )
+    history_token_limit: int = Field(
+        default=1000,
+        ge=0,
+        description="Estimated tokens of conversation history to send at most; older turns are "
+        "dropped first.",
+    )
     llm_context_window: int = Field(
         default=8192,
         ge=512,

@@ -115,6 +115,32 @@ curl -i -X DELETE "http://127.0.0.1:8000/api/v1/collections/COLLECTION_ID?cascad
 
 Without `cascade`, deleting a collection that still holds documents is a 409. Pass `collection_id` when ingesting (JSON field or form field), listing documents (`GET /documents?collection_id=...`) or querying, as shown below.
 
+## Conversations
+
+A conversation gives follow-up questions their context. It may be bound to a collection, in which case its queries search only that collection.
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/conversations \
+  -H "Content-Type: application/json" \
+  -d '{"collection_id": "COLLECTION_ID", "title": "Leave questions"}'
+```
+
+```json
+{"id": "7d3a...", "collection_id": "9b2f...", "title": "Leave questions", "created_at": "...", "updated_at": "...", "message_count": 0}
+```
+
+Both fields are optional. An untitled conversation takes its first question as its title.
+
+```bash
+curl http://127.0.0.1:8000/api/v1/conversations
+curl http://127.0.0.1:8000/api/v1/conversations/CONVERSATION_ID
+curl -i -X DELETE http://127.0.0.1:8000/api/v1/conversations/CONVERSATION_ID
+```
+
+`GET /conversations/{id}` includes `messages`, each with `role` (`user` or `assistant`), `content`, the `query_id` it came from and `created_at`. Deleting a conversation deletes its messages; deleting a collection deletes its conversations.
+
+To ask within a conversation, add `"conversation_id"` to `/query` or `/query/stream`, as shown below.
+
 ## Ingest raw text
 
 ```bash
@@ -181,6 +207,20 @@ JSON
 
 Add `"collection_id": "COLLECTION_ID"` to search one collection only; an unknown collection is a 404, and an empty one answers with no sources. Both `collection_id` and `document_id` may be given, in which case the document must belong to the collection.
 
+Add `"conversation_id": "CONVERSATION_ID"` to ask within a conversation. When the conversation already has turns and an LLM provider is configured, the question is first rewritten into a standalone search query, which retrieval uses; the model still answers the original question, with the recent turns in front of it. The response carries both:
+
+```json
+{
+  "question": "And what about remote work?",
+  "search_query": "remote work policy days per week",
+  "conversation_id": "7d3a...",
+  "answer": "Employees may work remotely up to three days per week [S1].",
+  "sources": ["..."]
+}
+```
+
+`search_query` equals the question when nothing was rewritten: outside a conversation, on its first question, with the extractive provider, or when the rewrite failed. The question and the answer are saved to the conversation. If the conversation is bound to a collection, a different `collection_id` in the request is a 400.
+
 `sources` lists only the chunks the answer was generated from: those scoring at least `RAG_MIN_RELEVANCE_SCORE` that fit the model's context budget, at most `top_k`. A citation `[Sn]` in the answer refers to `sources[n-1]`, the entry with `rank` n. It can be empty when nothing relevant was found.
 
 ## Ask within one document
@@ -221,7 +261,7 @@ data: {"type": "end", "query_id": "...", "latency_ms": 2310.4}
 
 | Event | When | Fields |
 |---|---|---|
-| `source` | Always first | `sources`: the same list `/query` returns |
+| `source` | Always first | `sources`: the same list `/query` returns; `search_query` and `conversation_id` as in `/query` |
 | `answer` | Zero or more times | `answer`: the next piece of text. Join them all to get the full answer |
 | `end` | Last, on success | `query_id`, `latency_ms` |
 | `error` | Last, on failure | `error`: the code a JSON error body would carry, or `internal_error`; `message` |
