@@ -1,6 +1,6 @@
 # Implementation plan: DocsGPT-inspired improvements
 
-Status: draft, 2026-10-25.
+Status: all planned phases done, 2026-10-28. Written 2026-10-25.
 
 Source: two comparison notes, "DocsGPT in brief" and "RAG QnA vs DocsGPT" (rows 1 to 23). They are
 not in this repo, so everything this plan needs from them is copied below. Row numbers refer to
@@ -477,8 +477,8 @@ uploaded through the API and found by a query.
 
 ### 7c: Guardrails
 
-Status: done on branch `phase-7c-guardrails`, waiting for review. 206 tests pass, and ruff
-reports nothing.
+Status: done and committed (`7c3ac9d`). 206 tests pass, and ruff reports nothing. With it,
+every planned phase is done; what remains is the backlog below.
 
 - [x] `app/services/guardrails.py` matches emails, phone numbers (10 to 15 digits, with an
       optional country code and bracketed area code, and not part of a longer run of digits),
