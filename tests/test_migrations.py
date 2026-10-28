@@ -26,7 +26,15 @@ def test_initialize_applies_all_migrations(tmp_path) -> None:
     db = SQLiteDatabase(tmp_path / "rag.db")
     db.initialize()
     assert applied_versions(db) == ALL_VERSIONS
-    expected = {"documents", "queries", "query_sources", "audit_events", "llm_calls", "api_keys"}
+    expected = {
+        "documents",
+        "queries",
+        "query_sources",
+        "audit_events",
+        "llm_calls",
+        "api_keys",
+        "collections",
+    }
     assert expected <= table_names(db)
 
 
@@ -56,7 +64,9 @@ def test_database_created_before_migrations_keeps_its_data(tmp_path) -> None:
     db.initialize()
     assert applied_versions(db) == ALL_VERSIONS
     with db.connect() as connection:
-        assert connection.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 1
+        (row,) = connection.execute("SELECT id, collection_id, status FROM documents").fetchall()
+        assert tuple(row) == ("doc-1", "default", "ready")
+        assert connection.execute("SELECT name FROM collections").fetchall()[0][0] == "default"
 
 
 def test_failed_migration_is_rolled_back(tmp_path) -> None:

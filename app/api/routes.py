@@ -30,6 +30,9 @@ from app.schemas import (
     ApiKeyCreateRequest,
     ApiKeyListResponse,
     ApiKeyResponse,
+    CollectionCreateRequest,
+    CollectionListResponse,
+    CollectionResponse,
     ComponentHealth,
     DocumentListResponse,
     DocumentResponse,
@@ -61,6 +64,7 @@ def container_from(request: Request) -> ApplicationContainer:
 def document_response(record, *, duplicate: bool = False) -> DocumentResponse:
     return DocumentResponse(
         id=record.id,
+        collection_id=record.collection_id,
         title=record.title,
         source=record.source,
         chunk_count=record.chunk_count,
@@ -183,6 +187,7 @@ def ingest_text(
         title=payload.title,
         source=payload.source,
         text=payload.text,
+        collection_id=payload.collection_id,
     )
     if result.duplicate:
         response.status_code = status.HTTP_200_OK
@@ -200,6 +205,7 @@ async def upload_document(
     response: Response,
     file: UploadFile = File(...),
     title: str | None = Form(default=None),
+    collection_id: str | None = Form(default=None),
 ) -> DocumentResponse:
     container = container_from(request)
     content = await file.read(container.settings.max_upload_bytes + 1)
@@ -217,6 +223,7 @@ async def upload_document(
         title=(title or filename),
         source=f"upload:{filename}",
         text=text,
+        collection_id=collection_id,
     )
     if result.duplicate:
         response.status_code = status.HTTP_200_OK
@@ -228,8 +235,11 @@ def list_documents(
     request: Request,
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
+    collection_id: str | None = Query(default=None),
 ) -> DocumentListResponse:
-    records = container_from(request).documents.list(limit=limit, offset=offset)
+    records = container_from(request).ingestion_agent.document_service.list(
+        limit=limit, offset=offset, collection_id=collection_id
+    )
     return DocumentListResponse(
         items=[document_response(record) for record in records],
         count=len(records),
@@ -260,6 +270,7 @@ def query_documents(payload: QueryRequest, request: Request) -> QueryResponse:
         question=payload.question,
         top_k=top_k,
         document_id=payload.document_id,
+        collection_id=payload.collection_id,
     )
     return QueryResponse(
         query_id=result.query_id,
@@ -290,6 +301,7 @@ def stream_query(payload: QueryRequest, request: Request) -> StreamingResponse:
         question=payload.question,
         top_k=top_k,
         document_id=payload.document_id,
+        collection_id=payload.collection_id,
     )
     return StreamingResponse(
         sse_events(stream),
@@ -312,6 +324,7 @@ def stats(request: Request) -> StatsResponse:
     container = container_from(request)
     usage = container.llm_calls.totals()
     return StatsResponse(
+        collection_count=container.collections.collections.count(),
         document_count=container.documents.count(),
         vector_count=container.vector_store.count(),
         query_count=container.queries.count(),
@@ -322,6 +335,54 @@ def stats(request: Request) -> StatsResponse:
             completion_tokens=usage.completion_tokens,
         ),
     )
+
+
+def collection_response(summary) -> CollectionResponse:
+    return CollectionResponse(**summary.collection.__dict__, document_count=summary.document_count)
+
+
+@router.post(
+    "/collections",
+    response_model=CollectionResponse,
+    status_code=status.HTTP_201_CREATED,
+    tags=["collections"],
+)
+def create_collection(payload: CollectionCreateRequest, request: Request) -> CollectionResponse:
+    summary = container_from(request).collections.create(
+        name=payload.name, description=payload.description
+    )
+    return collection_response(summary)
+
+
+@router.get("/collections", response_model=CollectionListResponse, tags=["collections"])
+def list_collections(request: Request) -> CollectionListResponse:
+    summaries = container_from(request).collections.list()
+    return CollectionListResponse(
+        items=[collection_response(s) for s in summaries], count=len(summaries)
+    )
+
+
+@router.get(
+    "/collections/{collection_id}", response_model=CollectionResponse, tags=["collections"]
+)
+def get_collection(collection_id: str, request: Request) -> CollectionResponse:
+    return collection_response(container_from(request).collections.get(collection_id))
+
+
+@router.delete(
+    "/collections/{collection_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    tags=["collections"],
+)
+def delete_collection(
+    collection_id: str,
+    request: Request,
+    cascade: bool = Query(
+        default=False, description="Also delete the collection's documents and their vectors."
+    ),
+) -> Response:
+    container_from(request).collections.delete(collection_id, cascade=cascade)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 def api_key_response(record) -> ApiKeyResponse:

@@ -293,8 +293,7 @@ Tests added:
 
 ## Phase 4: API-key authentication (row 10)
 
-Status: done on branch `phase-4-auth`, waiting for review. 118 tests pass, and ruff reports
-nothing.
+Status: done and committed (`fa1d1df`). 118 tests pass, and ruff reports nothing.
 
 Goal: require a key for every route except `/`, `/health` and the API docs.
 
@@ -334,20 +333,42 @@ startup warning; the OpenAPI spec declares the bearer scheme on protected routes
 
 ### 5a: Collections
 
-- [ ] A migration adds `collections(id, name UNIQUE, description, created_at)` with a `default`
-      collection, and adds `documents.collection_id`. Existing documents go into `default`.
-      Duplicate detection becomes per collection, `UNIQUE(collection_id, content_hash)`. SQLite
-      can't drop the current unique constraint in place, so the migration rebuilds the table.
-- [ ] Collection filtering stays in SQLite. Look up the collection's document ids and pass them to
-      the vector store as `document_ids`; for Chroma that is `{"document_id": {"$in": [...]}}`.
-      Vector metadata doesn't change and nothing needs backfilling, and moving a document to
-      another collection is a single SQL update. This is fine for hundreds to low thousands of
-      documents. Revisit it if the corpus grows well beyond that.
-- [ ] Endpoints: `POST /collections`, `GET /collections`, `GET /collections/{id}`, and
-      `DELETE /collections/{id}`, which refuses a non-empty collection unless `?cascade=true`.
-      `collection_id` is accepted on both ingestion routes, on `GET /documents`, and on both query
-      routes.
-- [ ] Per-collection retrieval settings stay in the backlog.
+Status: done on branch `phase-5a-collections`, waiting for review. 132 tests pass, and ruff
+reports nothing. 5b follows on its own branch.
+
+- [x] Migration 4 adds `collections(id, name UNIQUE, description, created_at)` with a `default`
+      collection (its id is the fixed string `default`, so clients can name it without looking it
+      up), and adds `documents.collection_id` with a foreign key. Existing documents go into
+      `default`. Duplicate detection becomes per collection, `UNIQUE(collection_id,
+      content_hash)`. SQLite can't drop the current unique constraint in place, so the migration
+      rebuilds the table.
+- [x] Collection filtering stays in SQLite. The orchestrator looks up the collection's document
+      ids and passes them to the retrieval agent as `document_ids`; for Chroma that is
+      `{"document_id": {"$in": [...]}}`. Vector metadata doesn't change and nothing needs
+      backfilling, and moving a document to another collection is a single SQL update. This is
+      fine for hundreds to low thousands of documents. Revisit it if the corpus grows well beyond
+      that. An empty collection returns no sources without a vector query, and a `document_id`
+      outside the given collection finds nothing.
+- [x] Endpoints: `POST /collections`, `GET /collections` (with document counts),
+      `GET /collections/{id}`, and `DELETE /collections/{id}`, which refuses a non-empty
+      collection unless `?cascade=true`, and refuses `default` always. `collection_id` is accepted
+      on both ingestion routes, on `GET /documents`, and on both query routes; an unknown one is a
+      404. `DocumentResponse` gains `collection_id` and `/stats` gains `collection_count`.
+- [x] Per-collection retrieval settings stay in the backlog.
+
+Checked on 2026-10-28 as a real upgrade: the phase 4 code (`fa1d1df`, migrations 1 to 3) was
+run from a temporary worktree to build a database with the two sample files and a query, then
+the 5a code opened it. Migration 4 rebuilt `documents`, both documents landed in `default` with
+their chunk counts, a query scoped to `default` found the handbook, re-uploading the handbook
+there was reported as a duplicate, and uploading it into a new `hr` collection created a second
+document.
+
+Tests added: per-collection duplicates and the foreign key at the repository level; the
+`document_ids` filter on both vector stores (Chroma through an in-memory client, so the `$in`
+syntax is real); the default collection and its counts; create, get, list, unique names; ingesting
+and listing by collection, including upload; the same text in two collections; scoped queries,
+empty and unknown collections, a document outside the collection, scoped streams; delete with
+and without cascade, and the undeletable default.
 
 ### 5b: Conversations
 

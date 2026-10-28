@@ -24,8 +24,9 @@ Its responsibility is semantic similarity search. Given a question embedding, it
 
 SQLite stores:
 
+- Collections, and the collection each document belongs to
 - Document lifecycle metadata
-- SHA-256 content hashes
+- SHA-256 content hashes, unique per collection
 - Ingestion status
 - Query history
 - Query-to-source trace records
@@ -127,7 +128,7 @@ sequenceDiagram
 
 1. **File validation**: TXT, Markdown, and PDF are accepted. Upload size is capped.
 2. **Text extraction**: Text files are decoded as UTF-8. PDF pages are parsed with `pypdf`.
-3. **Deduplication**: A SHA-256 hash of normalized text prevents duplicate vector storage.
+3. **Deduplication**: A SHA-256 hash of normalized text prevents duplicate vector storage. The hash is unique per collection, so the same text may be indexed once in each collection it is added to.
 4. **Lifecycle state**: SQLite first records the document as `processing`.
 5. **Chunking**: Text is split by word count with overlap. Each chunk records source character offsets.
 6. **Embedding**: Chunk vectors are generated in one batch.
@@ -167,6 +168,12 @@ sequenceDiagram
     O-->>API: Answer and source payload
     API-->>User: JSON response
 ```
+
+### Collections
+
+Collections live only in SQLite; chunk metadata in ChromaDB carries no collection, so moving a document between collections would be one SQL update and nothing needed backfilling when collections were added. A query with a `collection_id` first loads that collection's document ids from SQLite and passes them to the vector store as a filter (`{"document_id": {"$in": [...]}}` in Chroma). An unknown collection is a 404 before anything is searched; an empty one returns no sources without touching the vector store. This is fine for hundreds to low thousands of documents per collection; a much larger corpus would want the collection id stored on the vectors instead.
+
+Adding collections changed the uniqueness rule on `documents` (`UNIQUE(collection_id, content_hash)`). SQLite can't alter constraints in place, so migration 4 rebuilds the table, moving every existing document into the `default` collection.
 
 ### Streaming
 
@@ -213,7 +220,7 @@ The Retrieval Agent:
 - Validates the question
 - Embeds it
 - Over-fetches from the vector store: `min(max(top_k * 2, 20), 500)` hits
-- Optionally filters to one document
+- Optionally filters to one document, or to the documents of one collection
 - Drops hits below `min_relevance_score`, whichever answer provider is configured
 - Keeps the best remaining hits, up to `top_k`, whose estimated tokens fit the retrieval budget: `max(int((llm_context_window - llm_reserved_tokens) * 0.9), 100)`, at about four characters per token
 - Returns normalized `SearchHit` objects
@@ -315,7 +322,9 @@ Any valid key sees all data; per-tenant authorization is still to do.
 | Missing document | HTTP 404 |
 | Missing, unknown or revoked API key | HTTP 401 with `WWW-Authenticate: Bearer` |
 | Key management without an admin key configured | HTTP 403 |
-| Duplicate content | Existing document returned with HTTP 200 |
+| Duplicate content in the same collection | Existing document returned with HTTP 200 |
+| Unknown collection | HTTP 404 |
+| Deleting a non-empty collection without `cascade` | HTTP 409 |
 | Embedding/index failure | Document marked failed; partial vectors deleted |
 | LLM provider fails | Next fallback provider is tried; HTTP 502 once all have failed |
 | LLM failure during a stream | Next provider if nothing was sent yet; otherwise a final `error` event and the query is not saved |

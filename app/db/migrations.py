@@ -93,6 +93,48 @@ CREATE TABLE IF NOT EXISTS api_keys (
 );
 """
 
+# Collections group documents. Duplicate detection becomes per collection, which means a new
+# UNIQUE constraint on documents; SQLite can't change constraints in place, so the table is
+# rebuilt and existing rows land in the 'default' collection.
+COLLECTIONS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS collections (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    description TEXT,
+    created_at TEXT NOT NULL
+);
+
+INSERT OR IGNORE INTO collections(id, name, description, created_at)
+VALUES ('default', 'default', 'Documents ingested without a collection',
+        strftime('%Y-%m-%dT%H:%M:%f+00:00', 'now'));
+
+CREATE TABLE documents_new (
+    id TEXT PRIMARY KEY,
+    collection_id TEXT NOT NULL DEFAULT 'default' REFERENCES collections(id),
+    title TEXT NOT NULL,
+    source TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    chunk_count INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL CHECK(status IN ('processing', 'ready', 'failed')),
+    error_message TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE(collection_id, content_hash)
+);
+
+INSERT INTO documents_new(
+    id, collection_id, title, source, content_hash, chunk_count, status, error_message, created_at
+)
+SELECT id, 'default', title, source, content_hash, chunk_count, status, error_message, created_at
+FROM documents;
+
+DROP TABLE documents;
+ALTER TABLE documents_new RENAME TO documents;
+
+CREATE INDEX IF NOT EXISTS idx_documents_created_at ON documents(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(status);
+CREATE INDEX IF NOT EXISTS idx_documents_collection ON documents(collection_id, created_at DESC);
+"""
+
 # Append new migrations with the next version number. Never edit one that has shipped:
 # databases that already recorded it will not run it again.
 MIGRATIONS: tuple[Migration, ...] = (
@@ -100,6 +142,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(1, "initial_schema", INITIAL_SCHEMA),
     Migration(2, "llm_calls", LLM_CALLS_SCHEMA),
     Migration(3, "api_keys", API_KEYS_SCHEMA),
+    Migration(4, "collections", COLLECTIONS_SCHEMA),
 )
 
 MIGRATIONS_TABLE = """

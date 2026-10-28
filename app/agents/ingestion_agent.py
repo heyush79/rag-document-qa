@@ -9,5 +9,9 @@ class IngestionAgent:
     def __init__(self, document_service: DocumentService) -> None:
         self.document_service = document_service
 
-    def run(self, *, title: str, source: str, text: str) -> IngestionResult:
-        return self.document_service.ingest_text(title=title, source=source, text=text)
+    def run(
+        self, *, title: str, source: str, text: str, collection_id: str | None = None
+    ) -> IngestionResult:
+        return self.document_service.ingest_text(
+            title=title, source=source, text=text, collection_id=collection_id
+        )

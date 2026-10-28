@@ -12,6 +12,7 @@ from app.config import Settings
 from app.db.repositories import (
     ApiKeyRepository,
     AuditRepository,
+    CollectionRepository,
     DocumentRepository,
     LLMCallRepository,
     QueryRepository,
@@ -23,6 +24,7 @@ from app.services.answer_generation import (
     OpenAICompatibleAnswerGenerator,
 )
 from app.services.chunking import TextChunker
+from app.services.collection_service import CollectionService
 from app.services.document_service import DocumentService
 from app.services.embeddings import (
     Embedder,
@@ -44,6 +46,7 @@ class ApplicationContainer:
     audit: AuditRepository
     llm_calls: LLMCallRepository
     api_keys: ApiKeyRepository
+    collections: CollectionService
     embedder: Embedder
     vector_store: VectorStore
     # None when the extractive answer provider is configured.
@@ -97,6 +100,7 @@ def build_container(
     audit = AuditRepository(db)
     llm_calls = LLMCallRepository(db)
     api_keys = ApiKeyRepository(db)
+    collection_repository = CollectionRepository(db)
     # Shared by the LLM and embedding clients; tests pass one backed by a mock transport.
     http_client = http_client or httpx.Client()
 
@@ -113,9 +117,16 @@ def build_container(
     )
     document_service = DocumentService(
         documents=documents,
+        collections=collection_repository,
         audit=audit,
         chunker=chunker,
         vector_store=vector_store,
+    )
+    collection_service = CollectionService(
+        collections=collection_repository,
+        documents=documents,
+        document_service=document_service,
+        audit=audit,
     )
 
     llm = None
@@ -146,6 +157,7 @@ def build_container(
         audit=audit,
         llm_calls=llm_calls,
         api_keys=api_keys,
+        collections=collection_service,
         embedder=embedder,
         vector_store=vector_store,
         llm=llm,
@@ -155,5 +167,6 @@ def build_container(
             retrieval_agent=retrieval_agent,
             answer_agent=answer_agent,
             query_repository=queries,
+            collection_service=collection_service,
         ),
     )

@@ -6,7 +6,13 @@ import uuid
 from dataclasses import dataclass
 
 from app.core.exceptions import NotFoundError
-from app.db.repositories import AuditRepository, DocumentRecord, DocumentRepository
+from app.db.repositories import (
+    DEFAULT_COLLECTION_ID,
+    AuditRepository,
+    CollectionRepository,
+    DocumentRecord,
+    DocumentRepository,
+)
 from app.services.chunking import TextChunker
 from app.services.vector_store import VectorStore
 
@@ -24,21 +30,34 @@ class DocumentService:
         self,
         *,
         documents: DocumentRepository,
+        collections: CollectionRepository,
         audit: AuditRepository,
         chunker: TextChunker,
         vector_store: VectorStore,
     ) -> None:
         self.documents = documents
+        self.collections = collections
         self.audit = audit
         self.chunker = chunker
         self.vector_store = vector_store
 
-    def ingest_text(self, *, title: str, source: str, text: str) -> IngestionResult:
+    def ingest_text(
+        self,
+        *,
+        title: str,
+        source: str,
+        text: str,
+        collection_id: str | None = None,
+    ) -> IngestionResult:
         normalized_text = text.strip()
         if not normalized_text:
             raise ValueError("Document text cannot be empty")
+        collection_id = collection_id or DEFAULT_COLLECTION_ID
+        if self.collections.get(collection_id) is None:
+            raise NotFoundError(f"Collection '{collection_id}' was not found")
         content_hash = hashlib.sha256(normalized_text.encode("utf-8")).hexdigest()
-        existing = self.documents.get_by_hash(content_hash)
+        # Duplicates are detected per collection: the same text may live in two collections.
+        existing = self.documents.get_by_hash(content_hash, collection_id)
         if existing:
             return IngestionResult(document=existing, duplicate=True)
 
@@ -48,6 +67,7 @@ class DocumentService:
             title=title.strip(),
             source=source.strip(),
             content_hash=content_hash,
+            collection_id=collection_id,
         )
         try:
             chunks = self.chunker.split(normalized_text)
@@ -61,7 +81,11 @@ class DocumentService:
             self.audit.record(
                 "document_ingested",
                 document_id,
-                {"chunk_count": len(chunks), "source": record.source},
+                {
+                    "chunk_count": len(chunks),
+                    "source": record.source,
+                    "collection_id": collection_id,
+                },
             )
         except Exception as exc:
             logger.exception("Document ingestion failed", extra={"document_id": document_id})
@@ -81,8 +105,12 @@ class DocumentService:
             raise NotFoundError(f"Document '{document_id}' was not found")
         return document
 
-    def list(self, *, limit: int, offset: int) -> list[DocumentRecord]:
-        return self.documents.list(limit=limit, offset=offset)
+    def list(
+        self, *, limit: int, offset: int, collection_id: str | None = None
+    ) -> list[DocumentRecord]:
+        if collection_id is not None and self.collections.get(collection_id) is None:
+            raise NotFoundError(f"Collection '{collection_id}' was not found")
+        return self.documents.list(limit=limit, offset=offset, collection_id=collection_id)
 
     def delete(self, document_id: str) -> None:
         document = self.documents.get(document_id)

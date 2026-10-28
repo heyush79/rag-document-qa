@@ -7,10 +7,13 @@ class TextDocumentRequest(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     source: str = Field(default="api", min_length=1, max_length=500)
     text: str = Field(min_length=1)
+    # Defaults to the "default" collection.
+    collection_id: str | None = None
 
 
 class DocumentResponse(BaseModel):
     id: str
+    collection_id: str
     title: str
     source: str
     chunk_count: int
@@ -29,6 +32,26 @@ class QueryRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
     top_k: int | None = Field(default=None, ge=1, le=20)
     document_id: str | None = None
+    # Searches only this collection's documents; omit to search everything.
+    collection_id: str | None = None
+
+
+class CollectionCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    description: str | None = Field(default=None, max_length=1000)
+
+
+class CollectionResponse(BaseModel):
+    id: str
+    name: str
+    description: str | None
+    created_at: str
+    document_count: int
+
+
+class CollectionListResponse(BaseModel):
+    items: list[CollectionResponse]
+    count: int
 
 
 class SourceResponse(BaseModel):
@@ -69,6 +92,7 @@ class LLMUsageStats(BaseModel):
 
 
 class StatsResponse(BaseModel):
+    collection_count: int
     document_count: int
     vector_count: int
     query_count: int

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from app.agents.answer_agent import AnswerAgent
 from app.agents.retrieval_agent import RetrievalAgent
 from app.db.repositories import QueryRepository
+from app.services.collection_service import CollectionService
 from app.services.vector_store import SearchHit
 
 
@@ -37,10 +38,18 @@ class RAGOrchestrator:
         retrieval_agent: RetrievalAgent,
         answer_agent: AnswerAgent,
         query_repository: QueryRepository,
+        collection_service: CollectionService,
     ) -> None:
         self.retrieval_agent = retrieval_agent
         self.answer_agent = answer_agent
         self.query_repository = query_repository
+        self.collection_service = collection_service
+
+    def _scope(self, collection_id: str | None) -> list[str] | None:
+        """The document ids a query may search, or None for everything. 404 if unknown."""
+        if collection_id is None:
+            return None
+        return self.collection_service.document_ids(collection_id)
 
     def run(
         self,
@@ -48,6 +57,7 @@ class RAGOrchestrator:
         question: str,
         top_k: int,
         document_id: str | None = None,
+        collection_id: str | None = None,
     ) -> QueryResult:
         started = time.perf_counter()
         # Chosen up front so LLM calls can be logged against the query before it is saved.
@@ -56,6 +66,7 @@ class RAGOrchestrator:
             question=question,
             top_k=top_k,
             document_id=document_id,
+            document_ids=self._scope(collection_id),
         )
         answer = self.answer_agent.run(question=question, hits=hits, query_id=query_id)
         return self._save(
@@ -73,6 +84,7 @@ class RAGOrchestrator:
         question: str,
         top_k: int,
         document_id: str | None = None,
+        collection_id: str | None = None,
     ) -> QueryStream:
         """Retrieves before returning, so retrieval errors raise before anything is streamed."""
         started = time.perf_counter()
@@ -81,6 +93,7 @@ class RAGOrchestrator:
             question=question,
             top_k=top_k,
             document_id=document_id,
+            document_ids=self._scope(collection_id),
         )
         return QueryStream(
             sources=hits,

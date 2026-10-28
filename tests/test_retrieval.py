@@ -14,8 +14,15 @@ class StubVectorStore:
         self.hits = hits
         self.calls: list[dict] = []
 
-    def query(self, *, question, top_k, document_id=None):
-        self.calls.append({"question": question, "top_k": top_k, "document_id": document_id})
+    def query(self, *, question, top_k, document_id=None, document_ids=None):
+        self.calls.append(
+            {
+                "question": question,
+                "top_k": top_k,
+                "document_id": document_id,
+                "document_ids": document_ids,
+            }
+        )
         return self.hits[:top_k]
 
 
@@ -34,7 +41,9 @@ def test_fetch_size_over_fetches_within_bounds() -> None:
 def test_store_is_asked_for_fetch_size_hits() -> None:
     store = StubVectorStore([])
     retrieval_agent(store).run(question="  leave policy  ", top_k=4, document_id="doc-1")
-    assert store.calls == [{"question": "leave policy", "top_k": 20, "document_id": "doc-1"}]
+    assert store.calls == [
+        {"question": "leave policy", "top_k": 20, "document_id": "doc-1", "document_ids": None}
+    ]
 
 
 def test_keeps_at_most_top_k_hits(make_hit) -> None:

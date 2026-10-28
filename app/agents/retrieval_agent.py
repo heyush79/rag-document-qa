@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from app.services.tokens import estimate_tokens
 from app.services.vector_store import SearchHit, VectorStore
 
@@ -29,14 +31,22 @@ class RetrievalAgent:
         question: str,
         top_k: int,
         document_id: str | None = None,
+        document_ids: Sequence[str] | None = None,
     ) -> list[SearchHit]:
+        """`document_ids` is the collection's scope; `document_id` narrows to one document."""
         clean_question = question.strip()
         if not clean_question:
             raise ValueError("Question cannot be empty")
+        if document_ids is not None:
+            if document_id is not None and document_id not in document_ids:
+                return []  # the document is outside the collection
+            if document_id is None and not document_ids:
+                return []  # an empty collection
         candidates = self.vector_store.query(
             question=clean_question,
             top_k=self.fetch_size(top_k),
             document_id=document_id,
+            document_ids=None if document_id else document_ids,
         )
         kept: list[SearchHit] = []
         used_tokens = 0

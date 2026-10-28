@@ -8,6 +8,7 @@ The project ingests TXT, Markdown, and text-based PDF files, splits them into ov
 
 - FastAPI REST API with Swagger documentation
 - Text, Markdown, and PDF ingestion
+- Collections that group documents, with per-collection duplicate detection and scoped search
 - SHA-256 content deduplication
 - Word-window chunking with configurable overlap
 - Sentence Transformers embeddings locally, or any OpenAI-compatible embedding API
@@ -20,7 +21,7 @@ The project ingests TXT, Markdown, and text-based PDF files, splits them into ov
 - API-key authentication, off by default, with admin-managed keys stored as hashes
 - Request IDs, processing-time headers, health checks with an optional deep provider check, and structured errors
 - Dependency injection for deterministic tests
-- **118 passing Pytest tests**, run by GitHub Actions on every pull request
+- **132 passing Pytest tests**, run by GitHub Actions on every pull request
 - Architecture documentation
 
 ## Architecture at a glance
@@ -211,12 +212,16 @@ The event format is in [docs/API.md](docs/API.md#stream-an-answer).
 |---|---|---|
 | GET | `/` | Service metadata |
 | GET | `/api/v1/health` | SQLite and ChromaDB health; `?deep=true` also checks the embedder and each LLM provider |
-| POST | `/api/v1/documents/text` | Ingest raw text |
-| POST | `/api/v1/documents/upload` | Upload TXT, MD, or PDF |
-| GET | `/api/v1/documents` | List documents |
+| POST | `/api/v1/collections` | Create a collection |
+| GET | `/api/v1/collections` | List collections with document counts |
+| GET | `/api/v1/collections/{id}` | Get one collection |
+| DELETE | `/api/v1/collections/{id}` | Delete an empty collection, or everything in it with `?cascade=true` |
+| POST | `/api/v1/documents/text` | Ingest raw text, optionally into a collection |
+| POST | `/api/v1/documents/upload` | Upload TXT, MD, or PDF, optionally into a collection |
+| GET | `/api/v1/documents` | List documents, optionally by collection |
 | GET | `/api/v1/documents/{id}` | Get document metadata |
 | DELETE | `/api/v1/documents/{id}` | Delete metadata and vectors |
-| POST | `/api/v1/query` | Retrieve chunks and answer |
+| POST | `/api/v1/query` | Retrieve chunks and answer, across everything or one collection |
 | POST | `/api/v1/query/stream` | Same, with the answer streamed as Server-Sent Events |
 | GET | `/api/v1/queries` | Recent query history |
 | GET | `/api/v1/stats` | Document, vector and query counts, plus LLM call and token totals |
@@ -225,6 +230,27 @@ The event format is in [docs/API.md](docs/API.md#stream-an-answer).
 | DELETE | `/api/v1/api-keys/{id}` | Revoke an API key (admin key required) |
 
 More examples are in [docs/API.md](docs/API.md).
+
+## Collections
+
+Collections group documents so a question can be answered from one set at a time, such as one product's manuals or one team's policies. Every document belongs to exactly one collection; documents ingested without a `collection_id` go into the built-in `default` collection.
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/collections \
+  -H "Content-Type: application/json" \
+  -d '{"name": "hr", "description": "People policies"}'
+# {"id": "...", "name": "hr", ...}
+
+curl -X POST http://127.0.0.1:8000/api/v1/documents/text \
+  -H "Content-Type: application/json" \
+  -d '{"title": "Leave policy", "text": "...", "collection_id": "COLLECTION_ID"}'
+
+curl -X POST http://127.0.0.1:8000/api/v1/query \
+  -H "Content-Type: application/json" \
+  -d '{"question": "How many paid leave days?", "collection_id": "COLLECTION_ID"}'
+```
+
+Duplicate detection is per collection: the same text can be ingested into two collections, but not twice into one. Deleting a collection that still has documents is refused unless you pass `?cascade=true`, which deletes its documents and vectors too. The `default` collection can't be deleted.
 
 ## Use an OpenAI-compatible model
 
@@ -319,7 +345,7 @@ python -m pytest -q
 Expected result:
 
 ```text
-118 passed
+132 passed
 ```
 
 Coverage report:
@@ -357,7 +383,7 @@ rag-document-qa/
 │   ├── api/                    # REST endpoints and API-key checks
 │   ├── core/                   # Exceptions, logging, key generation and hashing
 │   ├── db/                     # SQLite migrations and repositories
-│   ├── services/               # Chunking, embedding, vector store, parsing, LLM client
+│   ├── services/               # Chunking, embedding, vector store, parsing, LLM, collections
 │   ├── config.py               # Environment-based settings
 │   ├── container.py            # Dependency wiring
 │   ├── main.py                 # FastAPI application factory
@@ -368,7 +394,7 @@ rag-document-qa/
 │   └── IMPLEMENTATION_PLAN.md  # Roadmap for DocsGPT-inspired features
 ├── sample_data/
 ├── scripts/
-├── tests/                      # 118 tests
+├── tests/                      # 132 tests
 ├── .env.example
 ├── Dockerfile
 ├── docker-compose.yml

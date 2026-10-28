@@ -85,6 +85,36 @@ curl -i -X DELETE http://127.0.0.1:8000/api/v1/api-keys/KEY_ID \
   -H "Authorization: Bearer $RAG_ADMIN_API_KEY"
 ```
 
+## Collections
+
+Every document belongs to one collection. Documents ingested without a `collection_id` go into the built-in collection with id `default`, which can't be deleted.
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/collections \
+  -H "Content-Type: application/json" \
+  -d '{"name": "hr", "description": "People policies"}'
+```
+
+```json
+{"id": "9b2f...", "name": "hr", "description": "People policies", "created_at": "...", "document_count": 0}
+```
+
+Names are unique; reusing one is a 409. List and get:
+
+```bash
+curl http://127.0.0.1:8000/api/v1/collections
+curl http://127.0.0.1:8000/api/v1/collections/COLLECTION_ID
+```
+
+Delete an empty collection, or a collection and all its documents and vectors:
+
+```bash
+curl -i -X DELETE http://127.0.0.1:8000/api/v1/collections/COLLECTION_ID
+curl -i -X DELETE "http://127.0.0.1:8000/api/v1/collections/COLLECTION_ID?cascade=true"
+```
+
+Without `cascade`, deleting a collection that still holds documents is a 409. Pass `collection_id` when ingesting (JSON field or form field), listing documents (`GET /documents?collection_id=...`) or querying, as shown below.
+
 ## Ingest raw text
 
 ```bash
@@ -92,6 +122,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/documents/text \
   -H "Content-Type: application/json" \
   -d @- <<'JSON'
 {
+  "collection_id": "COLLECTION_ID",
   "title": "Atlas Search Notes",
   "source": "internal-wiki",
   "text": "The Atlas Search service indexes documentation every night at 02:00 UTC. Incremental updates are consumed from Kafka and become searchable within five minutes."
@@ -147,6 +178,8 @@ curl -X POST http://127.0.0.1:8000/api/v1/query \
 }
 JSON
 ```
+
+Add `"collection_id": "COLLECTION_ID"` to search one collection only; an unknown collection is a 404, and an empty one answers with no sources. Both `collection_id` and `document_id` may be given, in which case the document must belong to the collection.
 
 `sources` lists only the chunks the answer was generated from: those scoring at least `RAG_MIN_RELEVANCE_SCORE` that fit the model's context budget, at most `top_k`. A citation `[Sn]` in the answer refers to `sources[n-1]`, the entry with `rank` n. It can be empty when nothing relevant was found.
 

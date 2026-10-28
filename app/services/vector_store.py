@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -41,7 +42,10 @@ class VectorStore(Protocol):
         question: str,
         top_k: int,
         document_id: str | None = None,
-    ) -> list[SearchHit]: ...
+        document_ids: Sequence[str] | None = None,
+    ) -> list[SearchHit]:
+        """`document_id` limits the search to one document, `document_ids` to a set."""
+        ...
 
     def delete_document(self, document_id: str) -> None: ...
 
@@ -116,12 +120,19 @@ class ChromaVectorStore:
         question: str,
         top_k: int,
         document_id: str | None = None,
+        document_ids: Sequence[str] | None = None,
     ) -> list[SearchHit]:
         count = self.collection.count()
         if count == 0:
             return []
+        if document_ids is not None and not document_ids:
+            return []  # Chroma rejects an empty $in; there is nothing to search anyway
         query_embedding = self.embedder.embed_query(question)
-        where = {"document_id": document_id} if document_id else None
+        where: dict[str, Any] | None = None
+        if document_id:
+            where = {"document_id": document_id}
+        elif document_ids is not None:
+            where = {"document_id": {"$in": list(document_ids)}}
         result = self.collection.query(
             query_embeddings=[query_embedding],
             n_results=min(top_k, count),
@@ -218,12 +229,15 @@ class InMemoryVectorStore:
         question: str,
         top_k: int,
         document_id: str | None = None,
+        document_ids: Sequence[str] | None = None,
     ) -> list[SearchHit]:
         query_embedding = self.embedder.embed_query(question)
+        allowed = None if document_ids is None else set(document_ids)
         candidates = [
             record
             for record in self._records.values()
-            if document_id is None or record.document_id == document_id
+            if (document_id is None or record.document_id == document_id)
+            and (allowed is None or record.document_id in allowed)
         ]
         scored: list[tuple[float, _MemoryRecord]] = []
         for record in candidates:

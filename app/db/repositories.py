@@ -6,8 +6,10 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from app.core.exceptions import ConflictError
+from app.core.exceptions import ConflictError, NotFoundError
 from app.db.sqlite import SQLiteDatabase
+
+DEFAULT_COLLECTION_ID = "default"
 
 
 def utc_now_iso() -> str:
@@ -17,6 +19,7 @@ def utc_now_iso() -> str:
 @dataclass(frozen=True)
 class DocumentRecord:
     id: str
+    collection_id: str
     title: str
     source: str
     content_hash: str
@@ -51,19 +54,26 @@ class DocumentRepository:
         title: str,
         source: str,
         content_hash: str,
+        collection_id: str = DEFAULT_COLLECTION_ID,
     ) -> DocumentRecord:
         created_at = utc_now_iso()
         try:
             with self.db.connect() as connection:
                 connection.execute(
                     """
-                    INSERT INTO documents(id, title, source, content_hash, status, created_at)
-                    VALUES (?, ?, ?, ?, 'processing', ?)
+                    INSERT INTO documents(
+                        id, collection_id, title, source, content_hash, status, created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, 'processing', ?)
                     """,
-                    (document_id, title, source, content_hash, created_at),
+                    (document_id, collection_id, title, source, content_hash, created_at),
                 )
         except sqlite3.IntegrityError as exc:
-            raise ConflictError("A document with the same content already exists") from exc
+            if "FOREIGN KEY" in str(exc):
+                raise NotFoundError(f"Collection '{collection_id}' was not found") from exc
+            raise ConflictError(
+                "A document with the same content already exists in this collection"
+            ) from exc
         record = self.get(document_id)
         assert record is not None
         return record
@@ -75,24 +85,38 @@ class DocumentRepository:
             ).fetchone()
         return self._to_record(row)
 
-    def get_by_hash(self, content_hash: str) -> DocumentRecord | None:
+    def get_by_hash(
+        self, content_hash: str, collection_id: str = DEFAULT_COLLECTION_ID
+    ) -> DocumentRecord | None:
         with self.db.connect() as connection:
             row = connection.execute(
-                "SELECT * FROM documents WHERE content_hash = ?", (content_hash,)
+                "SELECT * FROM documents WHERE content_hash = ? AND collection_id = ?",
+                (content_hash, collection_id),
             ).fetchone()
         return self._to_record(row)
 
-    def list(self, *, limit: int = 100, offset: int = 0) -> list[DocumentRecord]:
+    def list(
+        self, *, limit: int = 100, offset: int = 0, collection_id: str | None = None
+    ) -> list[DocumentRecord]:
         with self.db.connect() as connection:
             rows = connection.execute(
                 """
                 SELECT * FROM documents
+                WHERE (? IS NULL OR collection_id = ?)
                 ORDER BY created_at DESC
                 LIMIT ? OFFSET ?
                 """,
-                (limit, offset),
+                (collection_id, collection_id, limit, offset),
             ).fetchall()
         return [DocumentRecord(**dict(row)) for row in rows]
+
+    def ids_in_collection(self, collection_id: str) -> list[str]:
+        with self.db.connect() as connection:
+            rows = connection.execute(
+                "SELECT id FROM documents WHERE collection_id = ? ORDER BY created_at",
+                (collection_id,),
+            ).fetchall()
+        return [row["id"] for row in rows]
 
     def mark_ready(self, document_id: str, chunk_count: int) -> None:
         with self.db.connect() as connection:
@@ -121,9 +145,77 @@ class DocumentRepository:
             cursor = connection.execute("DELETE FROM documents WHERE id = ?", (document_id,))
         return cursor.rowcount > 0
 
+    def count(self, collection_id: str | None = None) -> int:
+        with self.db.connect() as connection:
+            row = connection.execute(
+                "SELECT COUNT(*) AS count FROM documents WHERE (? IS NULL OR collection_id = ?)",
+                (collection_id, collection_id),
+            ).fetchone()
+        return int(row["count"])
+
+
+@dataclass(frozen=True)
+class CollectionRecord:
+    id: str
+    name: str
+    description: str | None
+    created_at: str
+
+
+class CollectionRepository:
+    def __init__(self, db: SQLiteDatabase) -> None:
+        self.db = db
+
+    def create(
+        self, *, collection_id: str, name: str, description: str | None
+    ) -> CollectionRecord:
+        created_at = utc_now_iso()
+        try:
+            with self.db.connect() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO collections(id, name, description, created_at)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (collection_id, name, description, created_at),
+                )
+        except sqlite3.IntegrityError as exc:
+            raise ConflictError(f"A collection named '{name}' already exists") from exc
+        return CollectionRecord(
+            id=collection_id, name=name, description=description, created_at=created_at
+        )
+
+    def get(self, collection_id: str) -> CollectionRecord | None:
+        with self.db.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM collections WHERE id = ?", (collection_id,)
+            ).fetchone()
+        return CollectionRecord(**dict(row)) if row else None
+
+    def list(self) -> list[CollectionRecord]:
+        with self.db.connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM collections ORDER BY created_at, name"
+            ).fetchall()
+        return [CollectionRecord(**dict(row)) for row in rows]
+
+    def document_counts(self) -> dict[str, int]:
+        with self.db.connect() as connection:
+            rows = connection.execute(
+                "SELECT collection_id, COUNT(*) AS count FROM documents GROUP BY collection_id"
+            ).fetchall()
+        return {row["collection_id"]: int(row["count"]) for row in rows}
+
+    def delete(self, collection_id: str) -> bool:
+        with self.db.connect() as connection:
+            cursor = connection.execute(
+                "DELETE FROM collections WHERE id = ?", (collection_id,)
+            )
+        return cursor.rowcount > 0
+
     def count(self) -> int:
         with self.db.connect() as connection:
-            row = connection.execute("SELECT COUNT(*) AS count FROM documents").fetchone()
+            row = connection.execute("SELECT COUNT(*) AS count FROM collections").fetchone()
         return int(row["count"])
 
 
