@@ -35,6 +35,7 @@ from app.services.embeddings import (
     SentenceTransformerEmbedder,
 )
 from app.services.file_parser import FileParser
+from app.services.guardrails import Guardrails
 from app.services.llm import FallbackLLM, LLMProvider
 from app.services.query_rewriter import QueryRewriter
 from app.services.vector_store import ChromaVectorStore, VectorStore
@@ -183,5 +184,6 @@ def build_container(
             conversation_service=conversation_service,
             # The extractive provider has no LLM, so follow-ups search with the raw question.
             query_rewriter=QueryRewriter(llm),
+            guardrails=Guardrails(settings.guardrails_mode),
         ),
     )

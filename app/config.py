@@ -78,6 +78,13 @@ class Settings(BaseSettings):
         description="JSON list of providers tried in order when the primary one fails, each "
         '{"base_url": ..., "model": ..., "api_key": ...}.',
     )
+    guardrails_mode: Literal["off", "flag", "redact"] = Field(
+        default="flag",
+        description="off: no checks. flag: report emails, phone and card numbers, API keys and "
+        "prompt-injection phrases found in questions, answers and retrieved chunks as warnings. "
+        "redact: also replace the personal data and keys with placeholders in questions and "
+        "answers.",
+    )
     history_max_turns: int = Field(
         default=6,
         ge=0,

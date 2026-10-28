@@ -42,6 +42,7 @@ from app.schemas import (
     ConversationResponse,
     DocumentListResponse,
     DocumentResponse,
+    GuardrailWarning,
     HealthResponse,
     LLMUsageStats,
     MessageResponse,
@@ -101,6 +102,10 @@ def source_responses(hits: list[SearchHit]) -> list[SourceResponse]:
     ]
 
 
+def warning_responses(warnings) -> list[GuardrailWarning]:
+    return [GuardrailWarning(**warning.__dict__) for warning in warnings]
+
+
 def sse(event: dict[str, Any]) -> str:
     return f"data: {json.dumps(event)}\n\n"
 
@@ -112,6 +117,7 @@ def sse_events(stream: QueryStream) -> Iterator[str]:
             "sources": [source.model_dump() for source in source_responses(stream.sources)],
             "search_query": stream.search_query,
             "conversation_id": stream.conversation_id,
+            "warnings": [w.model_dump() for w in warning_responses(stream.warnings)],
         }
     )
     # The status line is already sent, so failures from here on become an error event.
@@ -119,7 +125,12 @@ def sse_events(stream: QueryStream) -> Iterator[str]:
         for event in stream.events:
             if isinstance(event, QueryResult):
                 yield sse(
-                    {"type": "end", "query_id": event.query_id, "latency_ms": event.latency_ms}
+                    {
+                        "type": "end",
+                        "query_id": event.query_id,
+                        "latency_ms": event.latency_ms,
+                        "warnings": [w.model_dump() for w in warning_responses(event.warnings)],
+                    }
                 )
             else:
                 yield sse({"type": "answer", "answer": event})
@@ -349,6 +360,7 @@ def query_documents(payload: QueryRequest, request: Request) -> QueryResponse:
         sources=source_responses(result.sources),
         search_query=result.search_query,
         conversation_id=result.conversation_id,
+        warnings=warning_responses(result.warnings),
     )
 
 

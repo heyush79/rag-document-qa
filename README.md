@@ -20,9 +20,10 @@ The project ingests TXT, Markdown, text-based PDF, DOCX, HTML and CSV files, spl
 - Streaming answers as Server-Sent Events
 - Agent-style orchestration for ingestion, retrieval, and answer generation
 - API-key authentication, off by default, with admin-managed keys stored as hashes
+- Guardrails that flag or redact personal data, secrets and prompt-injection phrases in questions, answers and retrieved chunks
 - Request IDs, processing-time headers, health checks with an optional deep provider check, and structured errors
 - Dependency injection for deterministic tests
-- **174 passing Pytest tests**, run by GitHub Actions on every pull request
+- **206 passing Pytest tests**, run by GitHub Actions on every pull request
 - Architecture documentation
 
 ## Architecture at a glance
@@ -364,6 +365,16 @@ The key is shown once; only its SHA-256 hash is stored. `/`, `/api/v1/health` an
 
 There is one tenant: any valid key sees all documents.
 
+## Guardrails
+
+Every query is checked for emails, phone numbers, card numbers (Luhn-validated), common API-key formats (`sk-…`, `AKIA…`, `ghp_…`, `xox…-…`) and prompt-injection phrases such as "ignore previous instructions". `RAG_GUARDRAILS_MODE` decides what happens:
+
+- `flag` (default): matches are logged and listed under `warnings` in the query response, with the kind, where it was found (`question`, `answer` or `source`) and a count. Nothing is changed.
+- `redact`: personal data and keys are also replaced with placeholders such as `[REDACTED_EMAIL]`, in the question before retrieval, the rewrite and the prompt, and in the answer before it is returned or saved. The streamed route holds each sentence back until it is complete, so a phone number split across two pieces is still caught.
+- `off`: no checks.
+
+Retrieved chunks are only ever flagged, never changed: a document that tries to instruct the model shows up as an `injection` warning naming the document, and the stored text keeps its offsets. The UI shows warnings under the answer.
+
 ## Use a remote embedding API
 
 The default embedding backend runs Sentence Transformers locally. To avoid installing torch, or to use a larger model, point the `openai-compatible` backend at any server that implements `POST /v1/embeddings`. Google AI Studio example:
@@ -390,7 +401,7 @@ python -m pytest -q
 Expected result:
 
 ```text
-174 passed
+206 passed
 ```
 
 Coverage report:
@@ -440,7 +451,7 @@ rag-document-qa/
 │   └── IMPLEMENTATION_PLAN.md  # Roadmap for DocsGPT-inspired features
 ├── sample_data/
 ├── scripts/
-├── tests/                      # 174 tests
+├── tests/                      # 206 tests
 ├── .env.example
 ├── Dockerfile
 ├── docker-compose.yml

@@ -10,6 +10,7 @@ from app.agents.retrieval_agent import RetrievalAgent
 from app.db.repositories import ConversationRecord, QueryRepository
 from app.services.collection_service import CollectionService
 from app.services.conversation_service import ConversationService
+from app.services.guardrails import Guardrails, GuardrailWarning, merge
 from app.services.prompting import Turn
 from app.services.query_rewriter import QueryRewriter
 from app.services.vector_store import SearchHit
@@ -25,6 +26,7 @@ class QueryResult:
     # What was searched: the question itself, or its rewrite from the conversation.
     search_query: str
     conversation_id: str | None
+    warnings: list[GuardrailWarning]
 
 
 @dataclass(frozen=True)
@@ -35,6 +37,8 @@ class QueryStream:
     events: Iterator[str | QueryResult]
     search_query: str
     conversation_id: str | None
+    # Warnings for the question and the sources; the QueryResult adds the answer's.
+    warnings: list[GuardrailWarning]
 
 
 @dataclass(frozen=True)
@@ -47,6 +51,7 @@ class _Prepared:
     conversation: ConversationRecord | None
     history: list[Turn]
     hits: list[SearchHit]
+    warnings: list[GuardrailWarning]
 
 
 class RAGOrchestrator:
@@ -61,6 +66,7 @@ class RAGOrchestrator:
         collection_service: CollectionService,
         conversation_service: ConversationService,
         query_rewriter: QueryRewriter,
+        guardrails: Guardrails,
     ) -> None:
         self.retrieval_agent = retrieval_agent
         self.answer_agent = answer_agent
@@ -68,6 +74,7 @@ class RAGOrchestrator:
         self.collection_service = collection_service
         self.conversation_service = conversation_service
         self.query_rewriter = query_rewriter
+        self.guardrails = guardrails
 
     def run(
         self,
@@ -92,7 +99,14 @@ class RAGOrchestrator:
             history=prepared.history,
             query_id=prepared.query_id,
         )
-        return self._save(prepared, answer=answer, top_k=top_k, started=started)
+        answer, answer_warnings = self.guardrails.check(answer, "answer")
+        return self._save(
+            prepared,
+            answer=answer,
+            top_k=top_k,
+            started=started,
+            warnings=[*prepared.warnings, *answer_warnings],
+        )
 
     def stream(
         self,
@@ -117,6 +131,7 @@ class RAGOrchestrator:
             events=self._stream_answer(prepared, top_k=top_k, started=started),
             search_query=prepared.search_query,
             conversation_id=prepared.conversation.id if prepared.conversation else None,
+            warnings=prepared.warnings,
         )
 
     def _prepare(
@@ -131,6 +146,9 @@ class RAGOrchestrator:
         clean_question = question.strip()
         if not clean_question:
             raise ValueError("Question cannot be empty")
+        # In redact mode the placeholders replace the data everywhere from here on: in the
+        # rewrite, the search, the prompt, and what is saved.
+        clean_question, warnings = self.guardrails.check(clean_question, "question")
         # Chosen up front so LLM calls can be logged against the query before it is saved.
         query_id = str(uuid.uuid4())
         conversation = None
@@ -152,7 +170,10 @@ class RAGOrchestrator:
             document_id=document_id,
             document_ids=self._scope(collection_id),
         )
-        return _Prepared(query_id, clean_question, search_query, conversation, history, hits)
+        warnings = merge([*warnings, *self.guardrails.check_sources(hits)])
+        return _Prepared(
+            query_id, clean_question, search_query, conversation, history, hits, warnings
+        )
 
     def _scope(self, collection_id: str | None) -> list[str] | None:
         """The document ids a query may search, or None for everything. 404 if unknown."""
@@ -164,19 +185,53 @@ class RAGOrchestrator:
         self, prepared: _Prepared, *, top_k: int, started: float
     ) -> Iterator[str | QueryResult]:
         pieces: list[str] = []
+        warnings = list(prepared.warnings)
+        # In redact mode, text is held back until a sentence is complete, so a match split
+        # across two pieces is still caught before anything reaches the client.
+        buffer = self.guardrails.stream_buffer()
         for piece in self.answer_agent.stream(
             question=prepared.question,
             hits=prepared.hits,
             history=prepared.history,
             query_id=prepared.query_id,
         ):
-            pieces.append(piece)
-            yield piece
+            if buffer is None:
+                pieces.append(piece)
+                yield piece
+                continue
+            released = buffer.feed(piece)
+            if released:
+                released, found = self.guardrails.check(released, "answer")
+                warnings.extend(found)
+                pieces.append(released)
+                yield released
+        if buffer is None:
+            _, found = self.guardrails.check("".join(pieces), "answer")  # flag mode: report
+            warnings.extend(found)
+        else:
+            tail = buffer.flush()
+            if tail:
+                tail, found = self.guardrails.check(tail, "answer")
+                warnings.extend(found)
+                pieces.append(tail)
+                yield tail
         # Only reached when the answer stream completes, so a failed stream saves nothing.
-        yield self._save(prepared, answer="".join(pieces).strip(), top_k=top_k, started=started)
+        yield self._save(
+            prepared,
+            answer="".join(pieces).strip(),
+            top_k=top_k,
+            started=started,
+            warnings=warnings,
+        )
 
     def _save(
-        self, prepared: _Prepared, *, answer: str, top_k: int, started: float
+        self,
+        prepared: _Prepared,
+        *,
+        answer: str,
+        top_k: int,
+        started: float,
+        warnings: list[GuardrailWarning],
     ) -> QueryResult:
         latency_ms = round((time.perf_counter() - started) * 1000, 3)
         self.query_repository.create(
@@ -212,4 +267,5 @@ class RAGOrchestrator:
             latency_ms=latency_ms,
             search_query=prepared.search_query,
             conversation_id=conversation_id,
+            warnings=merge(warnings),
         )

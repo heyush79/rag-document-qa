@@ -238,6 +238,8 @@ Add `"conversation_id": "CONVERSATION_ID"` to ask within a conversation. When th
 }
 ```
 
+`warnings` lists guardrail matches (see the README), each with `kind` (`email`, `phone`, `card`, `api_key` or `injection`), `location` (`question`, `answer` or `source`), `count` and, for a source, `detail` with the document title. It is empty when nothing matched or when `RAG_GUARDRAILS_MODE=off`. In `redact` mode, `question` and `answer` come back with placeholders in place of the personal data and keys.
+
 `search_query` equals the question when nothing was rewritten: outside a conversation, on its first question, with the extractive provider, or when the rewrite failed. The question and the answer are saved to the conversation. If the conversation is bound to a collection, a different `collection_id` in the request is a 400.
 
 `sources` lists only the chunks the answer was generated from: those scoring at least `RAG_MIN_RELEVANCE_SCORE` that fit the model's context budget, at most `top_k`. A citation `[Sn]` in the answer refers to `sources[n-1]`, the entry with `rank` n. It can be empty when nothing relevant was found.
@@ -280,9 +282,9 @@ data: {"type": "end", "query_id": "...", "latency_ms": 2310.4}
 
 | Event | When | Fields |
 |---|---|---|
-| `source` | Always first | `sources`: the same list `/query` returns; `search_query` and `conversation_id` as in `/query` |
+| `source` | Always first | `sources`: the same list `/query` returns; `search_query` and `conversation_id` as in `/query`; `warnings` for the question and the sources |
 | `answer` | Zero or more times | `answer`: the next piece of text. Join them all to get the full answer |
-| `end` | Last, on success | `query_id`, `latency_ms` |
+| `end` | Last, on success | `query_id`, `latency_ms`, `warnings` for the question, sources and answer |
 | `error` | Last, on failure | `error`: the code a JSON error body would carry, or `internal_error`; `message` |
 
 The offline extractive provider sends its whole answer as one `answer` event.

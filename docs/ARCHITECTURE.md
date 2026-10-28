@@ -326,6 +326,7 @@ The score is convenient for clients, but it is not a calibrated probability. In 
 - A minimum relevance threshold applies to every answer provider. When nothing passes it, the LLM is told the search found nothing rather than receiving an empty context.
 - Source chunks are returned in the API response for verification.
 - Query-to-source rows are persisted for audit and evaluation.
+- `app/services/guardrails.py` scans questions, answers and retrieved chunks for emails, phone numbers, Luhn-valid card numbers, common API-key formats and prompt-injection phrases. In `flag` mode (the default) matches are logged and returned as `warnings`; in `redact` mode personal data and keys are replaced with placeholders in the question before retrieval and in the answer before it is returned or saved, and the stream route holds text back until a sentence completes so a match split across pieces is still caught. Retrieved chunks are flagged, never changed, because the stored offsets describe the original text. Pattern matching is a cheap first line: it cannot catch everything, and the injection list is a set of phrases, not a classifier.
 
 ## 10a. Web UI
 
@@ -418,8 +419,8 @@ Every LLM call attempt is logged in `llm_calls`, and `GET /stats` totals the cal
 - Per-document access-control filters during retrieval
 - Malware scanning
 - MIME-type verification rather than extension-only checks
-- Prompt-injection detection and source trust policies
+- Source trust policies: injection phrases in documents are flagged, not blocked
 - Secret management
 - Rate limiting
 - Encryption and retention controls
-- PII redaction where required
+- Redaction beyond pattern matching, where required

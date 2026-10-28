@@ -703,7 +703,7 @@ function addAssistantMessage() {
       content.innerHTML = renderMarkdown(text);
       thread.scrollTop = thread.scrollHeight;
     },
-    finish({ text, sources: hits = [], searchQuery, question, latencyMs, note }) {
+    finish({ text, sources: hits = [], searchQuery, question, latencyMs, note, warnings = [] }) {
       content.classList.remove("cursor");
       content.innerHTML = renderMarkdown(text || "");
       if (!text) content.textContent = "(empty answer)";
@@ -724,6 +724,11 @@ function addAssistantMessage() {
       }
       if (latencyMs !== undefined) parts.push(el("span", { text: latencyMs >= 1000 ? `${(latencyMs / 1000).toFixed(1)} s` : `${Math.round(latencyMs)} ms` }));
       if (note) parts.push(el("span", { text: note }));
+      for (const warning of warnings) {
+        const where = warning.location === "source" ? `in ${warning.detail || "a source"}` : `in the ${warning.location}`;
+        const label = `${warning.kind.replace("_", " ")} ${where}${warning.count > 1 ? ` ×${warning.count}` : ""}`;
+        parts.push(el("span", { class: "warn", text: `⚠ ${label}`, title: "Guardrail match; see RAG_GUARDRAILS_MODE" }));
+      }
       foot.replaceChildren(...parts);
       foot.classList.toggle("hidden", !parts.length);
       content.querySelectorAll("a.cite").forEach((link) =>
@@ -781,7 +786,7 @@ async function ask(event) {
           answer.setText(text);
         } else if (item.type === "end") {
           ended = true;
-          answer.finish({ text, sources, searchQuery, question, latencyMs: item.latency_ms });
+          answer.finish({ text, sources, searchQuery, question, latencyMs: item.latency_ms, warnings: item.warnings });
         } else if (item.type === "error") {
           throw new Error(item.message);
         }
@@ -789,7 +794,7 @@ async function ask(event) {
       if (!ended) answer.finish({ text, sources, searchQuery, question, note: "stream ended early", latencyMs: performance.now() - started });
     } else {
       const result = await api("/query", { method: "POST", json: payload });
-      answer.finish({ text: result.answer, sources: result.sources, searchQuery: result.search_query, question, latencyMs: result.latency_ms });
+      answer.finish({ text: result.answer, sources: result.sources, searchQuery: result.search_query, question, latencyMs: result.latency_ms, warnings: result.warnings });
     }
     if (!state.conversation?.title) {
       // The server titles a new chat after its first question.

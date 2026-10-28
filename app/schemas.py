@@ -70,6 +70,13 @@ class SourceResponse(BaseModel):
     end_char: int
 
 
+class GuardrailWarning(BaseModel):
+    kind: str  # email, phone, card, api_key or injection
+    location: str  # question, answer or source
+    count: int
+    detail: str | None = None  # the document title, for a source
+
+
 class QueryResponse(BaseModel):
     query_id: str
     question: str
@@ -79,6 +86,8 @@ class QueryResponse(BaseModel):
     # What was searched: the question, or its rewrite from the conversation.
     search_query: str
     conversation_id: str | None = None
+    # Guardrail matches, when guardrails_mode is flag or redact.
+    warnings: list[GuardrailWarning] = Field(default_factory=list)
 
 
 class QueryHistoryItem(BaseModel):
