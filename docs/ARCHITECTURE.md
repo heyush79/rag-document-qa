@@ -297,7 +297,15 @@ The score is convenient for clients, but it is not a calibrated probability. In 
 - Source chunks are returned in the API response for verification.
 - Query-to-source rows are persisted for audit and evaluation.
 
-## 11. Error handling
+## 11. Authentication
+
+`app/api/auth.py` holds two router dependencies. The API router requires a valid key when `auth_enabled` is on; the admin router (`/api-keys`) always requires `admin_api_key`; the health route has neither. FastAPI's `HTTPBearer` reads the `Authorization` header and declares the scheme in the OpenAPI spec, so Swagger gets an Authorize button.
+
+A key is `rag_` plus 32 random bytes, URL-safe encoded. The `api_keys` table stores its SHA-256 hash, a 12-character display prefix, and when it was created, last used and revoked. SHA-256 is enough because the key is random: there is nothing for a slow hash to protect against. A valid request updates `last_used_at`. The admin key is compared in constant time and never stored. Authentication is off by default so local runs stay simple, and the app warns at startup while it is off.
+
+Any valid key sees all data; per-tenant authorization is still to do.
+
+## 12. Error handling
 
 | Failure | Current behavior |
 |---|---|
@@ -305,6 +313,8 @@ The score is convenient for clients, but it is not a calibrated probability. In 
 | Unsupported file type | HTTP 415 |
 | Oversized upload | HTTP 413 |
 | Missing document | HTTP 404 |
+| Missing, unknown or revoked API key | HTTP 401 with `WWW-Authenticate: Bearer` |
+| Key management without an admin key configured | HTTP 403 |
 | Duplicate content | Existing document returned with HTTP 200 |
 | Embedding/index failure | Document marked failed; partial vectors deleted |
 | LLM provider fails | Next fallback provider is tried; HTTP 502 once all have failed |
@@ -314,7 +324,7 @@ The score is convenient for clients, but it is not a calibrated probability. In 
 | Client disconnects during a stream | The app stops reading the model's stream; query not saved |
 | Embedding-model mismatch | HTTP 409 with remediation guidance |
 
-## 12. Observability
+## 13. Observability
 
 Every response includes:
 
@@ -333,7 +343,7 @@ Every LLM call attempt is logged in `llm_calls`, and `GET /stats` totals the cal
 - LLM failure rate
 - Answer faithfulness and citation accuracy
 
-## 13. Scaling path
+## 14. Scaling path
 
 ### Current local architecture
 
@@ -362,9 +372,9 @@ Every LLM call attempt is logged in `llm_calls`, and `GET /stats` totals the cal
 - Evaluation and feedback pipeline
 - Outbox pattern and consistency repair worker
 
-## 14. Security gaps to close before internet exposure
+## 15. Security gaps to close before internet exposure
 
-- Authentication and tenant authorization
+- Tenant authorization: every key sees all data (authentication exists; see section 11)
 - Per-document access-control filters during retrieval
 - Malware scanning
 - MIME-type verification rather than extension-only checks

@@ -213,8 +213,7 @@ Tests added:
 
 ## Phase 3: Providers, remote embeddings, usage logging, deep health check (rows 7, 8, 17)
 
-Status: done on branch `phase-3-providers`, waiting for review. 97 tests pass, and ruff reports
-nothing.
+Status: done and committed (`cedcb2f`). 97 tests pass, and ruff reports nothing.
 
 Goal: keep answering when one provider is rate-limited, run without a local embedding model, and
 record what each LLM call cost.
@@ -294,24 +293,42 @@ Tests added:
 
 ## Phase 4: API-key authentication (row 10)
 
+Status: done on branch `phase-4-auth`, waiting for review. 118 tests pass, and ruff reports
+nothing.
+
 Goal: require a key for every route except `/`, `/health` and the API docs.
 
-- [ ] A migration adds `api_keys(id, name, prefix, key_hash, created_at, last_used_at,
-      revoked_at)`. A key is `rag_` followed by 32 random URL-safe bytes. Store only its SHA-256
-      hash and an 8-character prefix for display. The key is random enough that a slow hash such
-      as bcrypt would add nothing.
-- [ ] A router-level dependency checks `Authorization: Bearer <key>`. A rejected request gets 401
-      in the existing error shape, with `error: "unauthorized"`. Update `last_used_at` on each use.
-- [ ] Settings: `auth_enabled` and `admin_api_key`. `auth_enabled` defaults to `false`, so local
-      runs and the current tests don't change, and the app logs a warning at startup while it is
-      off. `admin_api_key` is required for managing keys.
-- [ ] Admin endpoints: `POST /api/v1/api-keys` returns the plaintext key once,
-      `GET /api/v1/api-keys` lists keys, and `DELETE /api/v1/api-keys/{id}` revokes one.
-- [ ] One tenant only: any valid key can see all data. Limiting keys to certain collections can
+- [x] Migration 3 adds `api_keys(id, name, prefix, key_hash, created_at, last_used_at,
+      revoked_at)`. A key is `rag_` followed by 32 random URL-safe bytes
+      (`secrets.token_urlsafe(32)`). Only its SHA-256 hash is stored, with the first 12
+      characters (`rag_` plus 8 random ones) as the display prefix; the planned 8 would have left
+      only 4 random characters to tell keys apart.
+- [x] `app/api/auth.py`: `require_api_key` is a router-level dependency on the API router. It
+      reads `Authorization: Bearer <key>` through FastAPI's `HTTPBearer`, so Swagger gets an
+      Authorize button. A rejected request gets 401 in the existing error shape with
+      `error: "unauthorized"` and a `WWW-Authenticate: Bearer` header. `last_used_at` is updated
+      on each use. `/health` sits on a separate router with no dependency.
+- [x] Settings: `auth_enabled` (default `false`, so local runs and the existing tests don't
+      change; the app logs a warning at startup while it is off) and `admin_api_key`. Enabling
+      auth without an admin key fails validation, since no key could ever be created. The admin
+      key also works as a regular key, so an operator can use the API without creating one.
+- [x] Admin endpoints on their own router that always requires the admin key, even while auth is
+      off: `POST /api/v1/api-keys` returns the plaintext key once, `GET /api/v1/api-keys` lists
+      prefixes and usage, and `DELETE /api/v1/api-keys/{id}` revokes (204; again is 204; unknown
+      is 404). Without `admin_api_key` configured they answer 403 naming the setting.
+- [x] One tenant only: any valid key can see all data. Limiting keys to certain collections can
       follow phase 5.
+- [x] `scripts/ingest_sample.py` and `scripts/smoke_test.py` send `RAG_API_KEY` from the
+      environment when set.
 
-Tests: missing, wrong and revoked keys get 401. A valid key gets through. Admin routes need the
-admin key. The plaintext key is never stored. `/health` needs no key.
+Tests added: public routes (`/`, `/health`, `/docs`, `/openapi.json`) need no key; six protected
+routes, including the stream, reject a missing key with the 401 shape and header; wrong schemes
+and unknown keys are rejected; a created key is returned once, listed by prefix only, and stored
+only as its hash; a valid key gets through and `last_used_at` is set; a revoked key is rejected
+and revoking is idempotent; admin routes reject no key, a regular key and a wrong admin key; the
+admin key works on regular routes; auth is off by default and key management answers 403 without
+an admin key; keys can be managed while auth is off; enabling auth needs an admin key; the
+startup warning; the OpenAPI spec declares the bearer scheme on protected routes only.
 
 ## Phase 5: Collections, then conversations (rows 12, 2)
 

@@ -53,6 +53,17 @@ class Settings(BaseSettings):
     min_relevance_score: float = Field(default=0.15, ge=0.0, le=1.0)
     max_upload_mb: int = Field(default=10, ge=1, le=100)
 
+    auth_enabled: bool = Field(
+        default=False,
+        description="Require 'Authorization: Bearer <api key>' on every route except /, "
+        "/health and the API docs.",
+    )
+    admin_api_key: str | None = Field(
+        default=None,
+        description="Key for the /api-keys management routes; it also works as a regular API "
+        "key. Required when auth_enabled is true.",
+    )
+
     answer_provider: Literal["extractive", "openai-compatible"] = "extractive"
     llm_base_url: str | None = None
     llm_api_key: str | None = None
@@ -95,6 +106,8 @@ class Settings(BaseSettings):
             raise ValueError("llm_reserved_tokens must be smaller than llm_context_window")
         if self.embedding_backend == "openai-compatible" and not self.embedding_base_url:
             raise ValueError("OpenAI-compatible embedding backend requires: embedding_base_url")
+        if self.auth_enabled and not self.admin_api_key:
+            raise ValueError("auth_enabled requires admin_api_key, or no API key could be created")
         if self.answer_provider == "openai-compatible":
             missing = [
                 name

@@ -95,6 +95,29 @@ class HealthResponse(BaseModel):
     llm: list[ProviderHealth] | None = None
 
 
+class ApiKeyCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+
+
+class ApiKeyResponse(BaseModel):
+    id: str
+    name: str
+    prefix: str
+    created_at: str
+    last_used_at: str | None
+    revoked_at: str | None
+
+
+class ApiKeyCreatedResponse(ApiKeyResponse):
+    # The plaintext key, shown once. Only its hash is stored.
+    key: str
+
+
+class ApiKeyListResponse(BaseModel):
+    items: list[ApiKeyResponse]
+    count: int
+
+
 class ErrorResponse(BaseModel):
     error: str
     message: str

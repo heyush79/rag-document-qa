@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -9,7 +10,7 @@ import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from app.api.routes import router
+from app.api.routes import admin_router, public_router, router
 from app.config import Settings, get_settings
 from app.container import ApplicationContainer, build_container
 from app.core.exceptions import AppError
@@ -17,6 +18,8 @@ from app.core.logging import configure_logging
 from app.services.answer_generation import AnswerGenerator
 from app.services.embeddings import Embedder
 from app.services.vector_store import VectorStore
+
+logger = logging.getLogger(__name__)
 
 
 def create_app(
@@ -40,6 +43,10 @@ def create_app(
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         container.db.initialize()
+        if not resolved_settings.auth_enabled:
+            logger.warning(
+                "API authentication is disabled (RAG_AUTH_ENABLED=false): every route is open"
+            )
         yield
 
     application = FastAPI(
@@ -71,6 +78,7 @@ def create_app(
                 "message": exc.message,
                 "request_id": getattr(request.state, "request_id", None),
             },
+            headers=exc.headers,
         )
 
     @application.exception_handler(ValueError)
@@ -92,6 +100,8 @@ def create_app(
             "health": f"{resolved_settings.api_prefix}/health",
         }
 
+    application.include_router(public_router, prefix=resolved_settings.api_prefix)
     application.include_router(router, prefix=resolved_settings.api_prefix)
+    application.include_router(admin_router, prefix=resolved_settings.api_prefix)
     return application
 

@@ -80,12 +80,26 @@ CREATE INDEX IF NOT EXISTS idx_llm_calls_query_id ON llm_calls(query_id);
 CREATE INDEX IF NOT EXISTS idx_llm_calls_created_at ON llm_calls(created_at DESC);
 """
 
+# Only the SHA-256 hash of a key is stored, plus a short prefix so listings can tell keys apart.
+API_KEYS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS api_keys (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    prefix TEXT NOT NULL,
+    key_hash TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL,
+    last_used_at TEXT,
+    revoked_at TEXT
+);
+"""
+
 # Append new migrations with the next version number. Never edit one that has shipped:
 # databases that already recorded it will not run it again.
 MIGRATIONS: tuple[Migration, ...] = (
     # Idempotent, so databases created before migrations existed upgrade cleanly.
     Migration(1, "initial_schema", INITIAL_SCHEMA),
     Migration(2, "llm_calls", LLM_CALLS_SCHEMA),
+    Migration(3, "api_keys", API_KEYS_SCHEMA),
 )
 
 MIGRATIONS_TABLE = """

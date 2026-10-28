@@ -10,6 +10,7 @@ from app.agents.orchestrator import RAGOrchestrator
 from app.agents.retrieval_agent import RetrievalAgent
 from app.config import Settings
 from app.db.repositories import (
+    ApiKeyRepository,
     AuditRepository,
     DocumentRepository,
     LLMCallRepository,
@@ -42,6 +43,7 @@ class ApplicationContainer:
     queries: QueryRepository
     audit: AuditRepository
     llm_calls: LLMCallRepository
+    api_keys: ApiKeyRepository
     embedder: Embedder
     vector_store: VectorStore
     # None when the extractive answer provider is configured.
@@ -94,6 +96,7 @@ def build_container(
     queries = QueryRepository(db)
     audit = AuditRepository(db)
     llm_calls = LLMCallRepository(db)
+    api_keys = ApiKeyRepository(db)
     # Shared by the LLM and embedding clients; tests pass one backed by a mock transport.
     http_client = http_client or httpx.Client()
 
@@ -142,6 +145,7 @@ def build_container(
         queries=queries,
         audit=audit,
         llm_calls=llm_calls,
+        api_keys=api_keys,
         embedder=embedder,
         vector_store=vector_store,
         llm=llm,

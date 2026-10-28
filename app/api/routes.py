@@ -2,17 +2,34 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from collections.abc import Iterator
 from typing import Any
 
-from fastapi import APIRouter, File, Form, Query, Request, Response, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+    status,
+)
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
 
 from app.agents.orchestrator import QueryResult, QueryStream
+from app.api.auth import require_admin_key, require_api_key
 from app.container import ApplicationContainer
-from app.core.exceptions import AppError
+from app.core.exceptions import AppError, NotFoundError
+from app.core.security import display_prefix, generate_api_key, hash_api_key
 from app.schemas import (
+    ApiKeyCreatedResponse,
+    ApiKeyCreateRequest,
+    ApiKeyListResponse,
+    ApiKeyResponse,
     ComponentHealth,
     DocumentListResponse,
     DocumentResponse,
@@ -30,7 +47,11 @@ from app.services.vector_store import SearchHit
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
+# Three routers: /health needs no key, the API needs an API key when auth is enabled, and key
+# management always needs the admin key.
+public_router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_api_key)])
+admin_router = APIRouter(dependencies=[Depends(require_admin_key)], tags=["api-keys"])
 
 
 def container_from(request: Request) -> ApplicationContainer:
@@ -106,7 +127,7 @@ def check_embedder(container: ApplicationContainer) -> ComponentHealth:
     return ComponentHealth(status="ok")
 
 
-@router.get(
+@public_router.get(
     "/health",
     response_model=HealthResponse,
     response_model_exclude_none=True,
@@ -301,3 +322,36 @@ def stats(request: Request) -> StatsResponse:
             completion_tokens=usage.completion_tokens,
         ),
     )
+
+
+def api_key_response(record) -> ApiKeyResponse:
+    return ApiKeyResponse(**record.__dict__)
+
+
+@admin_router.post(
+    "/api-keys", response_model=ApiKeyCreatedResponse, status_code=status.HTTP_201_CREATED
+)
+def create_api_key(payload: ApiKeyCreateRequest, request: Request) -> ApiKeyCreatedResponse:
+    """Creates a key and returns it once; only its hash is stored."""
+    key = generate_api_key()
+    record = container_from(request).api_keys.create(
+        key_id=str(uuid.uuid4()),
+        name=payload.name,
+        prefix=display_prefix(key),
+        key_hash=hash_api_key(key),
+    )
+    return ApiKeyCreatedResponse(**record.__dict__, key=key)
+
+
+@admin_router.get("/api-keys", response_model=ApiKeyListResponse)
+def list_api_keys(request: Request) -> ApiKeyListResponse:
+    records = container_from(request).api_keys.list()
+    return ApiKeyListResponse(items=[api_key_response(r) for r in records], count=len(records))
+
+
+@admin_router.delete("/api-keys/{key_id}", status_code=status.HTTP_204_NO_CONTENT)
+def revoke_api_key(key_id: str, request: Request) -> Response:
+    """Revokes the key. Revoking an already revoked key is fine; an unknown one is a 404."""
+    if not container_from(request).api_keys.revoke(key_id):
+        raise NotFoundError(f"API key '{key_id}' was not found")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

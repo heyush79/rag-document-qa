@@ -42,6 +42,49 @@ curl "http://127.0.0.1:8000/api/v1/health?deep=true"
 
 `llm` lists the primary provider first, then the fallbacks. It is empty with the extractive answer provider. `detail` is only present on errors.
 
+## Authentication
+
+With `RAG_AUTH_ENABLED=true`, every request below needs an API key:
+
+```bash
+curl http://127.0.0.1:8000/api/v1/stats -H "Authorization: Bearer rag_..."
+```
+
+`/`, `/health` and the docs need no key. A missing, unknown or revoked key gets HTTP 401 with a `WWW-Authenticate: Bearer` header and the common error body, with `"error": "unauthorized"`. The admin key (`RAG_ADMIN_API_KEY`) works on every route as well.
+
+### Manage API keys
+
+These routes always need the admin key, even while authentication is off. Without `RAG_ADMIN_API_KEY` configured they answer 403.
+
+```bash
+# Create: the key is returned once, then only its hash is kept.
+curl -X POST http://127.0.0.1:8000/api/v1/api-keys \
+  -H "Authorization: Bearer $RAG_ADMIN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "reporting"}'
+```
+
+```json
+{
+  "id": "4f1c...",
+  "name": "reporting",
+  "prefix": "rag_k3pX9aQb",
+  "created_at": "2026-10-27T18:50:12.345678+00:00",
+  "last_used_at": null,
+  "revoked_at": null,
+  "key": "rag_k3pX9aQb..."
+}
+```
+
+```bash
+# List: prefixes and last use, never the keys.
+curl http://127.0.0.1:8000/api/v1/api-keys -H "Authorization: Bearer $RAG_ADMIN_API_KEY"
+
+# Revoke. Revoking again is a 204 too; an unknown id is a 404.
+curl -i -X DELETE http://127.0.0.1:8000/api/v1/api-keys/KEY_ID \
+  -H "Authorization: Bearer $RAG_ADMIN_API_KEY"
+```
+
 ## Ingest raw text
 
 ```bash

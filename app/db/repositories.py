@@ -295,6 +295,86 @@ class LLMCallRepository:
         return LLMCallRecord(**values)
 
 
+@dataclass(frozen=True)
+class ApiKeyRecord:
+    id: str
+    name: str
+    prefix: str
+    created_at: str
+    last_used_at: str | None
+    revoked_at: str | None
+
+
+class ApiKeyRepository:
+    """Stores key hashes only; the plaintext key is never written anywhere."""
+
+    COLUMNS = "id, name, prefix, created_at, last_used_at, revoked_at"
+
+    def __init__(self, db: SQLiteDatabase) -> None:
+        self.db = db
+
+    def create(self, *, key_id: str, name: str, prefix: str, key_hash: str) -> ApiKeyRecord:
+        created_at = utc_now_iso()
+        with self.db.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO api_keys(id, name, prefix, key_hash, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (key_id, name, prefix, key_hash, created_at),
+            )
+        return ApiKeyRecord(
+            id=key_id,
+            name=name,
+            prefix=prefix,
+            created_at=created_at,
+            last_used_at=None,
+            revoked_at=None,
+        )
+
+    def get(self, key_id: str) -> ApiKeyRecord | None:
+        with self.db.connect() as connection:
+            row = connection.execute(
+                f"SELECT {self.COLUMNS} FROM api_keys WHERE id = ?", (key_id,)
+            ).fetchone()
+        return ApiKeyRecord(**dict(row)) if row else None
+
+    def find_active_by_hash(self, key_hash: str) -> ApiKeyRecord | None:
+        with self.db.connect() as connection:
+            row = connection.execute(
+                f"SELECT {self.COLUMNS} FROM api_keys WHERE key_hash = ? AND revoked_at IS NULL",
+                (key_hash,),
+            ).fetchone()
+        return ApiKeyRecord(**dict(row)) if row else None
+
+    def touch(self, key_id: str) -> None:
+        with self.db.connect() as connection:
+            connection.execute(
+                "UPDATE api_keys SET last_used_at = ? WHERE id = ?", (utc_now_iso(), key_id)
+            )
+
+    def list(self) -> list[ApiKeyRecord]:
+        with self.db.connect() as connection:
+            rows = connection.execute(
+                f"SELECT {self.COLUMNS} FROM api_keys ORDER BY created_at DESC, id"
+            ).fetchall()
+        return [ApiKeyRecord(**dict(row)) for row in rows]
+
+    def revoke(self, key_id: str) -> bool:
+        """Marks the key revoked. Returns False when there is no such key."""
+        with self.db.connect() as connection:
+            exists = connection.execute(
+                "SELECT 1 FROM api_keys WHERE id = ?", (key_id,)
+            ).fetchone()
+            if not exists:
+                return False
+            connection.execute(
+                "UPDATE api_keys SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL",
+                (utc_now_iso(), key_id),
+            )
+        return True
+
+
 class AuditRepository:
     def __init__(self, db: SQLiteDatabase) -> None:
         self.db = db

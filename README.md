@@ -17,9 +17,10 @@ The project ingests TXT, Markdown, and text-based PDF files, splits them into ov
 - Optional OpenAI-compatible answer generator for a local or hosted model, with fallback providers and per-call token usage logging
 - Streaming answers as Server-Sent Events
 - Agent-style orchestration for ingestion, retrieval, and answer generation
+- API-key authentication, off by default, with admin-managed keys stored as hashes
 - Request IDs, processing-time headers, health checks with an optional deep provider check, and structured errors
 - Dependency injection for deterministic tests
-- **97 passing Pytest tests**, run by GitHub Actions on every pull request
+- **118 passing Pytest tests**, run by GitHub Actions on every pull request
 - Architecture documentation
 
 ## Architecture at a glance
@@ -219,6 +220,9 @@ The event format is in [docs/API.md](docs/API.md#stream-an-answer).
 | POST | `/api/v1/query/stream` | Same, with the answer streamed as Server-Sent Events |
 | GET | `/api/v1/queries` | Recent query history |
 | GET | `/api/v1/stats` | Document, vector and query counts, plus LLM call and token totals |
+| POST | `/api/v1/api-keys` | Create an API key (admin key required) |
+| GET | `/api/v1/api-keys` | List API keys (admin key required) |
+| DELETE | `/api/v1/api-keys/{id}` | Revoke an API key (admin key required) |
 
 More examples are in [docs/API.md](docs/API.md).
 
@@ -264,6 +268,31 @@ Set `RAG_LLM_CONTEXT_WINDOW` to your model's context window in tokens (default 8
 
 Retrieval asks the vector store for more chunks than `top_k`, drops any below `RAG_MIN_RELEVANCE_SCORE`, and keeps the best that fit the budget. The prompt wraps each chunk in a numbered `<document>` tag, tells the model the documents are reference data rather than instructions, and asks for `[S1]`-style citations. When nothing relevant is found, the model is told so instead of receiving an empty context. This reduces hallucination risk, although no prompt can abolish it completely. Humanity remains undefeated at inventing confident nonsense.
 
+## Authentication
+
+Authentication is off by default, so local runs need no key, and the app logs a warning at startup to say so. Turn it on before exposing the API:
+
+```env
+RAG_AUTH_ENABLED=true
+RAG_ADMIN_API_KEY=a-long-random-string
+```
+
+Then create a key with the admin key and use it on every request:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/api-keys \
+  -H "Authorization: Bearer $RAG_ADMIN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "reporting"}'
+# {"id": "...", "name": "reporting", "prefix": "rag_XXXXXXXX", "key": "rag_...", ...}
+
+curl http://127.0.0.1:8000/api/v1/stats -H "Authorization: Bearer rag_..."
+```
+
+The key is shown once; only its SHA-256 hash is stored. `/`, `/api/v1/health` and the API docs stay open. The admin key works on every route too, and only it can create, list or revoke keys. A request without a valid key gets a 401 with `"error": "unauthorized"`. The scripts in `scripts/` read the key from `RAG_API_KEY`.
+
+There is one tenant: any valid key sees all documents.
+
 ## Use a remote embedding API
 
 The default embedding backend runs Sentence Transformers locally. To avoid installing torch, or to use a larger model, point the `openai-compatible` backend at any server that implements `POST /v1/embeddings`. Google AI Studio example:
@@ -290,7 +319,7 @@ python -m pytest -q
 Expected result:
 
 ```text
-97 passed
+118 passed
 ```
 
 Coverage report:
@@ -325,8 +354,8 @@ rag-document-qa/
 ├── .github/workflows/ci.yml    # Lint and tests on GitHub Actions
 ├── app/
 │   ├── agents/                 # Ingestion, retrieval, answer, orchestration
-│   ├── api/routes.py           # REST endpoints
-│   ├── core/                   # Exceptions and logging
+│   ├── api/                    # REST endpoints and API-key checks
+│   ├── core/                   # Exceptions, logging, key generation and hashing
 │   ├── db/                     # SQLite migrations and repositories
 │   ├── services/               # Chunking, embedding, vector store, parsing, LLM client
 │   ├── config.py               # Environment-based settings
@@ -339,7 +368,7 @@ rag-document-qa/
 │   └── IMPLEMENTATION_PLAN.md  # Roadmap for DocsGPT-inspired features
 ├── sample_data/
 ├── scripts/
-├── tests/                      # 97 tests
+├── tests/                      # 118 tests
 ├── .env.example
 ├── Dockerfile
 ├── docker-compose.yml
@@ -352,4 +381,4 @@ rag-document-qa/
 
 This is production-style, not a claim that a single-process laptop service should run a bank.
 
-For a larger deployment, add authentication and authorization, object storage for originals, malware scanning, OCR for scanned PDFs, background ingestion jobs, reranking, evaluation datasets, metrics export, distributed tracing, rate limiting, a managed vector database, and a queue-backed consistency repair process.
+For a larger deployment, add per-tenant authorization, object storage for originals, malware scanning, OCR for scanned PDFs, background ingestion jobs, reranking, evaluation datasets, metrics export, distributed tracing, rate limiting, a managed vector database, and a queue-backed consistency repair process.
